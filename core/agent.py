@@ -469,3 +469,11 @@ class TermuxAgent:
 
     def status(self) -> dict[str, Any]:
         return {"workspace": str(self.workspace_dir), "state": self.memory.get_state(), "context": self.memory.get_recent_context()}
+
+    def run_inference(self, prompt: str, system_prompt: str = "You are an autonomous terminal agent helper.", endpoint: str = "http://127.0.0.1:8081/v1/chat/completions") -> str:
+        """Run local inference using the llama-server instance."""
+        from .llm_inference import LocalLLMInference
+        client = LocalLLMInference(endpoint=endpoint)
+        result = client.generate(prompt=prompt, system_prompt=system_prompt)
+        self.memory.log_action("llm_inference_executed", prompt=prompt, response=result)
+        return result
