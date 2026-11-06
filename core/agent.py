@@ -242,6 +242,10 @@ class TermuxAgent:
             summary.append("The previous action worked; continue with the next logical step.")
         else:
             summary.append("The previous action failed or was incomplete; revise the plan and retry with a safer step.")
+            if isinstance(last_result, dict):
+                error_message = last_result.get("error") or last_result.get("stderr") or last_result.get("body") or ""
+                if isinstance(error_message, str) and "directory" in error_message.lower():
+                    summary.append("FILE vs DIRECTORY RULE: use read_file only for files; use list_dir for directories. Never pass a directory path to read_file.")
         payload = last_result.get("stdout") or last_result.get("body") or last_result.get("stderr") or ""
         snippet = str(payload)[:180].replace("\n", " ")
         if snippet:
@@ -349,6 +353,8 @@ class TermuxAgent:
             return "The action succeeded; continue with the next logical step if the task is not yet finished.", None, True
 
         if "read" in goal.lower() or "open" in goal.lower() or "file" in goal.lower():
+            if isinstance(result, dict) and "directory" in str(result.get("error") or "").lower():
+                return "FILE vs DIRECTORY RULE: use read_file only for files; use list_dir for directories. Never pass a directory path to read_file.", "list workspace contents and then read the exact target file path", False
             return "The file operation failed; verify whether the path exists and adjust the plan.", "inspect workspace files", False
         return "The previous step did not complete successfully; self-correct by trying a safer or more specific step.", "re-evaluate with a more precise action", False
 

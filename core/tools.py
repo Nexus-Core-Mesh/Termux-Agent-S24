@@ -111,6 +111,8 @@ class ToolExecutor:
         file_path = Path(path)
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {path}")
+        if file_path.is_dir():
+            raise IsADirectoryError("Provided path is a directory. Use list_dir for directories or append the target filename.")
         return file_path.read_text(encoding=encoding)
 
     def path_exists(self, path: str | Path) -> bool:
