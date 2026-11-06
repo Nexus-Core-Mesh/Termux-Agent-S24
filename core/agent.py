@@ -113,6 +113,9 @@ class TermuxAgent:
             if content and not any(marker in content for marker in ("&&", "||", ";", "|", "\n", "\r")):
                 return content
         if re.search(r"(?:write|create|save|generate)\s+(?:a\s+)?(?:file|text)\b", goal, flags=re.IGNORECASE):
+            quoted = re.search(r"[\x27\x22]([^\x27\x22]+)[\x27\x22]", goal)
+            if quoted:
+                return quoted.group(1)
             return f"Autonomous agent action for: {goal}"
         return None
 
