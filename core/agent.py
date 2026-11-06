@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -54,9 +55,21 @@ class TermuxAgent:
         cleaned = (task or "").strip()
         if not cleaned:
             return []
+
         normalized = re.sub(r"\s+", " ", cleaned)
-        separator_pattern = r"\s*(?:;|\b(?:and\s+then|then|und\s+dann)\b)\s*"
+        separator_pattern = (
+            r"\s*(?:"
+            r";|"
+            r"\b(?:and\s+then|und\s+dann|then|dann)\b|"
+            r",\s*(?=(?:and\s+)?(?:then|dann|read|write|create|save|generate|show|list|open|print|inspect|display|lies|lese|zeige|schreibe|erstelle|speichere|öffne|check|prüfe|view)\b)"
+            r")\s*"
+        )
         parts = [part.strip() for part in re.split(separator_pattern, normalized, flags=re.IGNORECASE) if part and part.strip()]
+        if len(parts) > 1:
+            flattened: list[str] = []
+            for part in parts:
+                flattened.extend(TermuxAgent.split_subtasks(part))
+            return flattened
         return parts or [normalized]
 
     @staticmethod
@@ -83,23 +96,23 @@ class TermuxAgent:
         if not goal_text:
             return str(self.workspace_dir)
 
-        patterns = [
-            r"(?:named|name|in|at|to|from)\s+([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*\.[A-Za-z0-9]{1,10})",
-            r"(?:workspace|~?/)?[A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*\.[A-Za-z0-9]{1,10}",
+        stripped = re.sub(r"\s+(?:and\s+then|then|und\s+dann|dann|;|, )\s+", " ", goal_text, flags=re.IGNORECASE)
+        for pattern in [
+            r"(?:named|name|in|at|to|from|of)\s+([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*\.[A-Za-z0-9]{1,20})",
+            r"(?:workspace|~?/)?[A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*\.[A-Za-z0-9]{1,20}",
             r"(?:workspace|~?/)[A-Za-z0-9_.\-/]+",
-        ]
-        for pattern in patterns:
-            matches = re.findall(pattern, goal_text, flags=re.IGNORECASE)
+        ]:
+            matches = re.findall(pattern, stripped, flags=re.IGNORECASE)
+            if not matches:
+                continue
             for candidate in matches:
-                if not candidate:
-                    continue
                 cleaned = candidate.strip().strip('"\'')
-                if any(marker in cleaned for marker in ("&&", "||", ";", "|", "\n", "\r")):
+                if not cleaned or any(marker in cleaned for marker in ("&&", "||", "|", "\n", "\r")):
                     continue
                 if cleaned.lower() in {"workspace", "file", "path", "location"}:
                     return str(self.workspace_dir)
-                if cleaned.lower() == "workspace/":
-                    return str(self.workspace_dir)
+                if re.search(r"\b(?:and\s+then|then|und\s+dann|dann|read|write|create|save|show|list|open|inspect|print|display|file)\b", cleaned, flags=re.IGNORECASE):
+                    continue
                 try:
                     return self.tools.resolve_workspace_path(self.workspace_dir, cleaned)
                 except ValueError:
@@ -110,13 +123,30 @@ class TermuxAgent:
         match = re.search(r"(?:content|text|message)\s*[:=]\s*(.+)", goal, flags=re.IGNORECASE)
         if match:
             content = match.group(1).strip().strip('"\'')
-            if content and not any(marker in content for marker in ("&&", "||", ";", "|", "\n", "\r")):
+            if content and not any(marker in content for marker in ("&&", "||", "|", "\n", "\r")):
                 return content
+        content_after = re.search(r"(?:with\s+content|content|text|message)\s+(?:is\s+)?(.+?)(?:\s*(?:and\s+then|then|und\s+dann|dann|;|,\s*(?:read|write|create|save|generate|show|list|open|print|inspect|display)|$))", goal, flags=re.IGNORECASE)
+        if content_after:
+            candidate = content_after.group(1).strip().strip('"\'')
+            if candidate and not any(marker in candidate for marker in ("&&", "||", "|", "\n", "\r")):
+                return candidate
         if re.search(r"(?:write|create|save|generate)\s+(?:a\s+)?(?:file|text)\b", goal, flags=re.IGNORECASE):
             quoted = re.search(r"[\x27\x22]([^\x27\x22]+)[\x27\x22]", goal)
             if quoted:
                 return quoted.group(1)
             return f"Autonomous agent action for: {goal}"
+        return None
+
+    @staticmethod
+    def _extract_limit(goal: str) -> int | None:
+        patterns = [
+            r"(?:first|last|only|nur|ersten|letzten)\s+(?:the\s+)?(?:die\s+)?(\d+)\s+(?:chars?|characters|bytes?|zeichen)",
+            r"(?:first|last|only|nur|ersten|letzten)\s+(?:the\s+)?(\d+)\s+(?:chars?|characters|bytes?|zeichen)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, goal, flags=re.IGNORECASE)
+            if match:
+                return max(0, int(match.group(1)))
         return None
 
     def _resolve_task_to_action(self, task: str) -> tuple[str, dict[str, Any]]:
@@ -125,11 +155,16 @@ class TermuxAgent:
             return "run_command", {"command": ["echo", "agent idle"]}
 
         lowered = cleaned.lower()
-        if re.search(r"(write|create|save|generate|make).*file|file.*(write|create|save|generate|make)", lowered):
-            path_match = re.search(r"(?:named|name|in)\s+([A-Za-z0-9_.\-/]+)", cleaned, flags=re.IGNORECASE)
+        slice_match = self._extract_limit(cleaned)
+        limit = slice_match
+
+        write_pattern = re.search(r"(?:write|create|save|generate|make|schreibe|schreiben|erstelle|erstellen|speichere|speichern|erzeuge|generiere)", lowered)
+        read_pattern = re.search(r"(?:read|open|show|cat|inspect|view|list|lies|lese|zeige|anzeigen|ansehen|öffne|öffnen|liste)", lowered)
+        if write_pattern and ("file" in lowered or "datei" in lowered or "text" in lowered or "content" in lowered or "message" in lowered):
+            path_match = re.search(r"(?:named|name|in|at|to|for|datei|file)\s+([A-Za-z0-9_.\-/]+)", cleaned, flags=re.IGNORECASE)
             path_name = path_match.group(1) if path_match else "agent_task.txt"
             target = self.tools.safe_join(self.workspace_dir, path_name)
-            content_match = re.search(r"(?:with\s+content|content|text|message)\s*[:=]?\s*(.+)$", cleaned, flags=re.IGNORECASE)
+            content_match = re.search(r"(?:with\s+content|content|text|message)\s*[:=]?\s*(.+?)(?:\s*(?:and\s+then|then|und\s+dann|dann|;|,\s*(?:read|write|create|save|generate|show|list|open|print|inspect|display|lies|lese|zeige|schreibe|erstelle|speichere))|$)", cleaned, flags=re.IGNORECASE)
             content = (
                 content_match.group(1).strip().strip('"\'')
                 if content_match and content_match.group(1)
@@ -137,19 +172,21 @@ class TermuxAgent:
             )
             return "write_file", {"path": target, "content": content}
 
-        if re.search(r"(read|open|show|cat|inspect|view)\s+(?:file|the file|content)", lowered):
+        if read_pattern and ("file" in lowered or "datei" in lowered or "workspace" in lowered or "content" in lowered or "read" in lowered or "lies" in lowered or "lese" in lowered):
             path = self._extract_path(cleaned)
+            if limit is not None:
+                return "read_file", {"path": path, "limit": limit}
             return "read_file", {"path": path}
 
-        if re.search(r"(list|ls|dir|show directory|workspace)", lowered):
+        if re.search(r"(?:list|ls|dir|show directory|workspace|ordner|verzeichnis)", lowered):
             return "list_dir", {"path": str(self.workspace_dir)}
 
-        if re.search(r"(http|https|api|fetch|request|url)", lowered):
+        if re.search(r"(?:http|https|api|fetch|request|url)", lowered):
             match = re.search(r"https?://\S+", cleaned)
             url = match.group(0) if match else "https://api.github.com"
             return "http_get", {"url": url, "expected_json": "json" in lowered or "api" in lowered}
 
-        if re.search(r"(system|info|status|platform|uname)", lowered):
+        if re.search(r"(?:system|info|status|platform|uname)", lowered):
             return "system_info", {}
 
         return "run_command", {"command": ["echo", f"agent task: {cleaned}"]}
@@ -173,6 +210,26 @@ class TermuxAgent:
 
     def identify_action(self, goal: str, last_result: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
         lowered = goal.lower()
+        limit = self._extract_limit(goal)
+
+        if re.search(r"(?:show|print|display)\s+(?:only\s+)?(?:the\s+)?(?:first|last)\s+\d+\s+(?:chars?|characters|bytes?)", lowered):
+            previous_content = None
+            if isinstance(last_result, dict):
+                previous_content = last_result.get("content") or last_result.get("stdout") or last_result.get("body")
+                if isinstance(previous_content, dict):
+                    previous_content = json.dumps(previous_content, ensure_ascii=False)
+            if previous_content is None:
+                previous_content = self.memory.get_state("last_content")
+            if previous_content is None:
+                previous_path = self.memory.get_state("last_file_path")
+                if previous_path:
+                    try:
+                        previous_content = self.tools.read_file(previous_path)
+                    except (FileNotFoundError, OSError):
+                        previous_content = None
+            if previous_content is not None:
+                return "slice_output", {"text": str(previous_content), "limit": limit}
+
         if re.search(r"(http|https|api|request|fetch|url|web)", lowered):
             match = re.search(r"https?://\S+", goal)
             url = match.group(0) if match else "https://api.github.com"
@@ -182,8 +239,19 @@ class TermuxAgent:
             content = self._extract_content(goal) or f"Autonomous agent action for: {goal}\n"
             return "write_file", {"path": path, "content": content}
         if re.search(r"(read|open|show|cat|inspect|view|file)", lowered):
-            path = self._extract_path(goal) or str(self.workspace_dir / "notes.txt")
-            return "read_file", {"path": path}
+            path = self._extract_path(goal)
+            if path is None:
+                path = last_result.get("path") if isinstance(last_result, dict) else None
+            if path is None:
+                path = self.memory.get_state("last_file_path") or str(self.workspace_dir / "notes.txt")
+            if path == str(self.workspace_dir) and re.search(r"(?:show|print|display)\s+(?:only\s+)?(?:the\s+)?(?:first|last)", lowered):
+                previous_content = self.memory.get_state("last_content")
+                if previous_content is not None:
+                    return "slice_output", {"text": str(previous_content), "limit": limit}
+            payload = {"path": path}
+            if limit is not None:
+                payload["limit"] = limit
+            return "read_file", payload
         if re.search(r"(list|ls|dir|workspace|directory)", lowered):
             return "list_dir", {"path": str(self.workspace_dir)}
         if re.search(r"(system|status|info|platform|uname)", lowered):
@@ -197,11 +265,26 @@ class TermuxAgent:
             return self.execute_command(params["command"], timeout=params.get("timeout", 30))
         if action_name == "read_file":
             try:
-                return {"ok": True, "content": self.tools.read_file(params["path"])}
+                content = self.tools.read_file(params["path"])
+                self.memory.update_state("last_file_path", params["path"])
+                self.memory.update_state("last_content", content)
+                limit = params.get("limit")
+                if limit is not None:
+                    content = content[: int(limit)]
+                return {"ok": True, "content": content}
             except FileNotFoundError:
                 return {"ok": False, "error": f"File not found: {params['path']}"}
+        if action_name == "slice_output":
+            text = str(params.get("text", ""))
+            limit = params.get("limit")
+            if limit is not None:
+                text = text[: int(limit)]
+            self.memory.update_state("last_content", text)
+            return {"ok": True, "content": text}
         if action_name == "write_file":
             path = self.tools.write_file(params["path"], params["content"])
+            self.memory.update_state("last_file_path", path)
+            self.memory.update_state("last_content", params["content"])
             return {"ok": True, "path": path, "bytes_written": len(params["content"])}
         if action_name == "list_dir":
             return {"ok": True, "entries": self.tools.list_dir(params["path"])}
@@ -278,13 +361,13 @@ class TermuxAgent:
         self.memory.update_state("last_run", payload)
         return payload
 
-    def _run_single_goal(self, goal: str, max_cycles: int = 5, prior_context: str = "") -> dict[str, Any]:
+    def _run_single_goal(self, goal: str, max_cycles: int = 5, prior_context: str = "", initial_result: dict[str, Any] | None = None) -> dict[str, Any]:
         if not goal or not goal.strip():
             return {"status": "empty_goal", "goal": goal, "cycles": 0, "history": []}
 
         self.memory.record_goal(goal)
         steps: list[dict[str, Any]] = []
-        last_result: dict[str, Any] | None = None
+        last_result: dict[str, Any] | None = initial_result
         completed = False
         current_goal = goal.strip()
 
@@ -354,13 +437,15 @@ class TermuxAgent:
             sequence_history: list[dict[str, Any]] = []
             combined: list[dict[str, Any]] = []
             prior_context = ""
+            previous_result: dict[str, Any] | None = None
             for idx, subtask in enumerate(subtasks, 1):
-                previous = self._run_single_goal(subtask, max_cycles=max_cycles, prior_context=prior_context)
+                previous = self._run_single_goal(subtask, max_cycles=max_cycles, prior_context=prior_context, initial_result=previous_result)
                 combined.append({"index": idx, "task": subtask, "result": previous})
                 sequence_history.extend(previous.get("history", []))
+                previous_result = previous.get("history", [{}])[-1].get("result") if previous.get("history") else previous
                 prior_context = (
                     f"Completed subtask #{idx}: {subtask} ({previous.get('status')}) | "
-                    f"last result: {self._summarize_result(previous)}"
+                    f"last result: {self._summarize_result(previous_result or previous)}"
                 )
             return {
                 "status": "completed",
