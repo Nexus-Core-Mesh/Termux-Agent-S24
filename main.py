@@ -10,13 +10,16 @@ from core.agent import TermuxAgent
 
 
 def _run_once(agent: TermuxAgent, task: str, cycles: int) -> dict:
-    return agent.run_once(task=task) if task else agent.run_autonomous(task, max_cycles=cycles)
+    task_text = (task or "").strip()
+    if not task_text:
+        return {"status": "empty_task", "task": task_text, "history": []}
+    return agent.run_autonomous(task_text, max_cycles=max(cycles, 1))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the local Termux agent.")
     parser.add_argument("--task", default="", help="High-level task for the agent")
-    parser.add_argument("--cycles", type=int, default=3, help="Number of autonomous cycles to run")
+    parser.add_argument("--cycles", type=int, default=5, help="Number of autonomous cycles to run")
     args = parser.parse_args()
 
     agent = TermuxAgent(workspace_dir="workspace")
@@ -40,7 +43,7 @@ def main() -> None:
             print("Agent session ended.")
             break
 
-        result = _run_once(agent, user_input, max_cycles=3)
+        result = _run_once(agent, user_input, 5)
         print(json.dumps(result, indent=2, ensure_ascii=False))
 
 

@@ -164,12 +164,27 @@ class ToolExecutor:
                 "body": body,
             }
 
-    def safe_join(self, root: str | Path, candidate: str) -> str:
+    def resolve_workspace_path(self, root: str | Path, candidate: str | Path) -> str:
         root_path = Path(root).resolve()
-        candidate_path = (root_path / candidate).resolve()
-        if root_path not in candidate_path.parents and candidate_path != root_path:
+        raw = str(candidate).strip().strip('"\'')
+        if not raw:
+            return str(root_path)
+        if any(marker in raw for marker in ("&&", "||", ";", "|", "\n", "\r")):
+            raise ValueError(f"Invalid path candidate: {candidate!r}")
+
+        if raw.startswith("~"):
+            resolved = Path(raw).expanduser()
+        elif Path(raw).is_absolute():
+            resolved = Path(raw)
+        else:
+            resolved = (root_path / raw).resolve()
+
+        if root_path not in resolved.parents and resolved != root_path:
             raise ValueError(f"Path escapes workspace root: {candidate}")
-        return str(candidate_path)
+        return str(resolved)
+
+    def safe_join(self, root: str | Path, candidate: str) -> str:
+        return self.resolve_workspace_path(root, candidate)
 
     def inspect_path(self, path: str | Path) -> dict[str, Any]:
         file_path = Path(path)

@@ -49,19 +49,55 @@ class TermuxAgent:
         self.memory.log_action("write_file", path=saved_path, append=append, length=len(content))
         return saved_path
 
+    @staticmethod
+    def split_subtasks(task: str) -> list[str]:
+        cleaned = (task or "").strip()
+        if not cleaned:
+            return []
+        separators = [
+            r"\s*and then\s*",
+            r"\s*then\s*",
+            r"\s*und dann\s*",
+            r"\s*;\s*",
+        ]
+        pattern = "|".join(f"({token})" for token in separators)
+        parts = [part.strip() for part in re.split(pattern, cleaned, flags=re.IGNORECASE) if part and part.strip()]
+        if len(parts) == 1:
+            return parts
+        filtered: list[str] = []
+        for part in parts:
+            if part.lower() in {"and then", "then", "und dann", ";"}:
+                continue
+            filtered.append(part)
+        return filtered or [cleaned]
+
     def _extract_path(self, goal: str) -> str | None:
-        matches = re.findall(r"(?:[A-Za-z0-9_./-]+\.[A-Za-z0-9]{1,10}|~/[A-Za-z0-9_./-]+|/\S+)", goal)
-        if matches:
-            candidate = matches[0].replace("~", str(Path.home()))
-            if candidate.startswith(str(self.workspace_dir)):
-                return candidate
-            return self.tools.safe_join(self.workspace_dir, candidate)
+        patterns = [
+            r"(?:named|name)\s+([A-Za-z0-9_.\-/]+)",
+            r"(?:file|path|location)\s+(?:at\s+)?([A-Za-z0-9_./\\-]+)",
+            r"(?:workspace/|/)?[A-Za-z0-9_.\-/]+\.[A-Za-z0-9]{1,10}",
+            r"(?:workspace|/\S+|~/\S+)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, goal, flags=re.IGNORECASE)
+            if match:
+                candidate = match.group(1) if match.lastindex else match.group(0)
+                candidate = candidate.strip().strip('"\'')
+                if any(marker in candidate for marker in ("&&", "||", ";", "|", "\n", "\r")):
+                    continue
+                if candidate.lower() in {"workspace", "file", "path", "location"}:
+                    return str(self.workspace_dir)
+                try:
+                    return self.tools.resolve_workspace_path(self.workspace_dir, candidate)
+                except ValueError:
+                    continue
         return str(self.workspace_dir)
 
     def _extract_content(self, goal: str) -> str | None:
         match = re.search(r"(?:content|text|message)\s*[:=]\s*(.+)", goal, flags=re.IGNORECASE)
         if match:
-            return match.group(1).strip().strip('"\'')
+            content = match.group(1).strip().strip('"\'')
+            return content if content else None
         return None
 
     def _resolve_task_to_action(self, task: str) -> tuple[str, dict[str, Any]]:
@@ -71,7 +107,7 @@ class TermuxAgent:
 
         lowered = cleaned.lower()
         if re.search(r"(write|create|save|generate|make).*file|file.*(write|create|save|generate|make)", lowered):
-            path_match = re.search(r"(?:named|name)\s+([A-Za-z0-9_.-]+)", cleaned, flags=re.IGNORECASE)
+            path_match = re.search(r"(?:named|name)\s+([A-Za-z0-9_.\-/]+)", cleaned, flags=re.IGNORECASE)
             path_name = path_match.group(1) if path_match else "agent_task.txt"
             target = self.tools.safe_join(self.workspace_dir, path_name)
             content_match = re.search(r"with content\s*(.+)$|content\s*[:=]\s*(.+)$", cleaned, flags=re.IGNORECASE)
@@ -192,6 +228,27 @@ class TermuxAgent:
             return payload
 
         task_text = (task or "").strip()
+        if not task_text:
+            return {"status": "empty_task", "task": task_text, "history": []}
+
+        subtasks = self.split_subtasks(task_text)
+        if len(subtasks) > 1:
+            sequence_result = {
+                "status": "completed",
+                "goal": task_text,
+                "subtasks": [],
+                "history": [],
+            }
+            context_note = ""
+            for idx, subtask in enumerate(subtasks, 1):
+                sub_result = self.run_autonomous(subtask, max_cycles=5)
+                sequence_result["subtasks"].append({"index": idx, "task": subtask, "result": sub_result})
+                sequence_result["history"].extend(sub_result.get("history", []))
+                context_note = f"Step {idx}: {subtask} -> {sub_result.get('status')}"
+                self.memory.log_action("task_sequence_step", index=idx, task=subtask, status=sub_result.get("status"), context=context_note)
+            self.memory.update_state("last_run", sequence_result)
+            return sequence_result
+
         action_name, params = self._resolve_task_to_action(task_text)
         result = self.perform_action(action_name, params)
         payload = {
@@ -204,7 +261,7 @@ class TermuxAgent:
         self.memory.update_state("last_run", payload)
         return payload
 
-    def run_autonomous(self, goal: str, max_cycles: int = 5) -> dict[str, Any]:
+    def _run_single_goal(self, goal: str, max_cycles: int = 5, prior_context: str = "") -> dict[str, Any]:
         if not goal or not goal.strip():
             return {"status": "empty_goal", "goal": goal, "cycles": 0, "history": []}
 
@@ -216,6 +273,8 @@ class TermuxAgent:
 
         for cycle in range(1, max_cycles + 1):
             thought = self.reason_about_goal(current_goal, last_result)
+            if prior_context:
+                thought = f"{prior_context} | {thought}"
             action_name, params = self.identify_action(current_goal, last_result)
             action = {"name": action_name, "params": params}
             result = self.perform_action(action_name, params)
@@ -263,9 +322,36 @@ class TermuxAgent:
             "max_cycles": max_cycles,
             "cycles": len(steps),
             "history": steps,
+            "context": prior_context,
         }
         self.memory.update_state("last_autonomous_run", summary)
         return summary
+
+    def run_autonomous(self, goal: str, max_cycles: int = 5) -> dict[str, Any]:
+        task_text = (goal or "").strip()
+        if not task_text:
+            return {"status": "empty_goal", "goal": goal, "cycles": 0, "history": []}
+
+        subtasks = self.split_subtasks(task_text)
+        if len(subtasks) > 1:
+            sequence_history: list[dict[str, Any]] = []
+            combined: list[dict[str, Any]] = []
+            prior_context = ""
+            for idx, subtask in enumerate(subtasks, 1):
+                previous = self._run_single_goal(subtask, max_cycles=max_cycles, prior_context=prior_context)
+                combined.append({"index": idx, "task": subtask, "result": previous})
+                sequence_history.extend(previous.get("history", []))
+                prior_context = f"Completed subtask #{idx}: {subtask} ({previous.get('status')})"
+            return {
+                "status": "completed",
+                "goal": task_text,
+                "subtasks": combined,
+                "max_cycles": max_cycles,
+                "cycles": sum(item["result"].get("cycles", 0) for item in combined),
+                "history": sequence_history,
+            }
+
+        return self._run_single_goal(task_text, max_cycles=max_cycles)
 
     def run_loop(self, task: str = "", command: str | list[str] | None = None, max_cycles: int = 1) -> dict[str, Any]:
         results: list[dict[str, Any]] = []
