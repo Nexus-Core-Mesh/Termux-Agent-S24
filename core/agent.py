@@ -57,7 +57,13 @@ class TermuxAgent:
             return []
 
         normalized = re.sub(r"\s+", " ", cleaned)
-        separator_pattern = r"\s*(?:;|\b(?:and\s+then|then|und\s+dann)\b|,\s*(?:and\s+then|then|und\s+dann)|,\s*(?:read|write|create|save|generate|show|list|open|print|inspect)\b)\s*"
+        separator_pattern = (
+            r"\s*(?:"
+            r";|"
+            r"\b(?:and\s+then|und\s+dann|then|dann)\b|"
+            r",\s*(?=(?:and\s+)?(?:then|dann|read|write|create|save|generate|show|list|open|print|inspect|display|lies|lese|zeige|schreibe|erstelle|speichere|öffne|check|prüfe|view)\b)"
+            r")\s*"
+        )
         parts = [part.strip() for part in re.split(separator_pattern, normalized, flags=re.IGNORECASE) if part and part.strip()]
         if len(parts) > 1:
             flattened: list[str] = []
@@ -90,20 +96,23 @@ class TermuxAgent:
         if not goal_text:
             return str(self.workspace_dir)
 
+        stripped = re.sub(r"\s+(?:and\s+then|then|und\s+dann|dann|;|, )\s+", " ", goal_text, flags=re.IGNORECASE)
         for pattern in [
-            r"(?:named|name|in|at|to|from)\s+([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*\.[A-Za-z0-9]{1,10})",
-            r"(?:workspace|~?/)?[A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*\.[A-Za-z0-9]{1,10}",
+            r"(?:named|name|in|at|to|from|of)\s+([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*\.[A-Za-z0-9]{1,20})",
+            r"(?:workspace|~?/)?[A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*\.[A-Za-z0-9]{1,20}",
             r"(?:workspace|~?/)[A-Za-z0-9_.\-/]+",
         ]:
-            matches = re.findall(pattern, goal_text, flags=re.IGNORECASE)
+            matches = re.findall(pattern, stripped, flags=re.IGNORECASE)
             if not matches:
                 continue
             for candidate in matches:
                 cleaned = candidate.strip().strip('"\'')
-                if not cleaned or any(marker in cleaned for marker in ("&&", "||", ";", "|", "\n", "\r")):
+                if not cleaned or any(marker in cleaned for marker in ("&&", "||", "|", "\n", "\r")):
                     continue
                 if cleaned.lower() in {"workspace", "file", "path", "location"}:
                     return str(self.workspace_dir)
+                if re.search(r"\b(?:and\s+then|then|und\s+dann|dann|read|write|create|save|show|list|open|inspect|print|display|file)\b", cleaned, flags=re.IGNORECASE):
+                    continue
                 try:
                     return self.tools.resolve_workspace_path(self.workspace_dir, cleaned)
                 except ValueError:
@@ -114,8 +123,13 @@ class TermuxAgent:
         match = re.search(r"(?:content|text|message)\s*[:=]\s*(.+)", goal, flags=re.IGNORECASE)
         if match:
             content = match.group(1).strip().strip('"\'')
-            if content and not any(marker in content for marker in ("&&", "||", ";", "|", "\n", "\r")):
+            if content and not any(marker in content for marker in ("&&", "||", "|", "\n", "\r")):
                 return content
+        content_after = re.search(r"(?:with\s+content|content|text|message)\s+(?:is\s+)?(.+?)(?:\s*(?:and\s+then|then|und\s+dann|dann|;|,\s*(?:read|write|create|save|generate|show|list|open|print|inspect|display)|$))", goal, flags=re.IGNORECASE)
+        if content_after:
+            candidate = content_after.group(1).strip().strip('"\'')
+            if candidate and not any(marker in candidate for marker in ("&&", "||", "|", "\n", "\r")):
+                return candidate
         if re.search(r"(?:write|create|save|generate)\s+(?:a\s+)?(?:file|text)\b", goal, flags=re.IGNORECASE):
             return f"Autonomous agent action for: {goal}"
         return None
@@ -136,11 +150,11 @@ class TermuxAgent:
         slice_match = re.search(r"(?:first|last|only)\s+(?:the\s+)?(\d+)\s+(?:chars?|characters|bytes?)", cleaned, flags=re.IGNORECASE)
         limit = int(slice_match.group(1)) if slice_match else None
 
-        if re.search(r"(write|create|save|generate|make).*file|file.*(write|create|save|generate|make)", lowered):
-            path_match = re.search(r"(?:named|name|in)\s+([A-Za-z0-9_.\-/]+)", cleaned, flags=re.IGNORECASE)
+        if re.search(r"(?:write|create|save|generate|make).*file|file.*(?:write|create|save|generate|make)", lowered):
+            path_match = re.search(r"(?:named|name|in|at|to|for)\s+([A-Za-z0-9_.\-/]+)", cleaned, flags=re.IGNORECASE)
             path_name = path_match.group(1) if path_match else "agent_task.txt"
             target = self.tools.safe_join(self.workspace_dir, path_name)
-            content_match = re.search(r"(?:with\s+content|content|text|message)\s*[:=]?\s*(.+)$", cleaned, flags=re.IGNORECASE)
+            content_match = re.search(r"(?:with\s+content|content|text|message)\s*[:=]?\s*(.+?)(?:\s*(?:and\s+then|then|und\s+dann|dann|;|,\s*(?:read|write|create|save|generate|show|list|open|print|inspect|display))|$)", cleaned, flags=re.IGNORECASE)
             content = (
                 content_match.group(1).strip().strip('"\'')
                 if content_match and content_match.group(1)
@@ -148,21 +162,21 @@ class TermuxAgent:
             )
             return "write_file", {"path": target, "content": content}
 
-        if re.search(r"(read|open|show|cat|inspect|view)\s+(?:file|the file|content)", lowered):
+        if re.search(r"(?:read|open|show|cat|inspect|view|list)\s+(?:file|the file|content|workspace)", lowered):
             path = self._extract_path(cleaned)
             if limit is not None:
                 return "read_file", {"path": path, "limit": limit}
             return "read_file", {"path": path}
 
-        if re.search(r"(list|ls|dir|show directory|workspace)", lowered):
+        if re.search(r"(?:list|ls|dir|show directory|workspace)", lowered):
             return "list_dir", {"path": str(self.workspace_dir)}
 
-        if re.search(r"(http|https|api|fetch|request|url)", lowered):
+        if re.search(r"(?:http|https|api|fetch|request|url)", lowered):
             match = re.search(r"https?://\S+", cleaned)
             url = match.group(0) if match else "https://api.github.com"
             return "http_get", {"url": url, "expected_json": "json" in lowered or "api" in lowered}
 
-        if re.search(r"(system|info|status|platform|uname)", lowered):
+        if re.search(r"(?:system|info|status|platform|uname)", lowered):
             return "system_info", {}
 
         return "run_command", {"command": ["echo", f"agent task: {cleaned}"]}
