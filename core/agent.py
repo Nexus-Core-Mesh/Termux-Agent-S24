@@ -54,41 +54,54 @@ class TermuxAgent:
         cleaned = (task or "").strip()
         if not cleaned:
             return []
-        separators = [
-            r"\s*and then\s*",
-            r"\s*then\s*",
-            r"\s*und dann\s*",
-            r"\s*;\s*",
-        ]
-        pattern = "|".join(f"({token})" for token in separators)
-        parts = [part.strip() for part in re.split(pattern, cleaned, flags=re.IGNORECASE) if part and part.strip()]
-        if len(parts) == 1:
-            return parts
-        filtered: list[str] = []
-        for part in parts:
-            if part.lower() in {"and then", "then", "und dann", ";"}:
-                continue
-            filtered.append(part)
-        return filtered or [cleaned]
+        normalized = re.sub(r"\s+", " ", cleaned)
+        separator_pattern = r"\s*(?:;|\b(?:and\s+then|then|und\s+dann)\b)\s*"
+        parts = [part.strip() for part in re.split(separator_pattern, normalized, flags=re.IGNORECASE) if part and part.strip()]
+        return parts or [normalized]
+
+    @staticmethod
+    def _summarize_result(result: dict[str, Any]) -> str:
+        if not isinstance(result, dict):
+            return "no result"
+        payload = result.get("result", result)
+        if not isinstance(payload, dict):
+            return str(payload)[:120]
+        status = "success" if payload.get("ok") or payload.get("returncode") == 0 or payload.get("status") == 200 else "failed"
+        path = payload.get("path") or payload.get("file")
+        entries = payload.get("entries")
+        content = payload.get("content")
+        if path:
+            return f"{status}; path={path}"
+        if entries:
+            return f"{status}; entries={len(entries)}"
+        if content:
+            return f"{status}; content={str(content)[:80]}"
+        return status
 
     def _extract_path(self, goal: str) -> str | None:
+        goal_text = (goal or "").strip()
+        if not goal_text:
+            return str(self.workspace_dir)
+
         patterns = [
-            r"(?:named|name)\s+([A-Za-z0-9_.\-/]+)",
-            r"(?:file|path|location)\s+(?:at\s+)?([A-Za-z0-9_./\\-]+)",
-            r"(?:workspace/|/)?[A-Za-z0-9_.\-/]+\.[A-Za-z0-9]{1,10}",
-            r"(?:workspace|/\S+|~/\S+)",
+            r"(?:named|name|in|at|to|from)\s+([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*\.[A-Za-z0-9]{1,10})",
+            r"(?:workspace|~?/)?[A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*\.[A-Za-z0-9]{1,10}",
+            r"(?:workspace|~?/)[A-Za-z0-9_.\-/]+",
         ]
         for pattern in patterns:
-            match = re.search(pattern, goal, flags=re.IGNORECASE)
-            if match:
-                candidate = match.group(1) if match.lastindex else match.group(0)
-                candidate = candidate.strip().strip('"\'')
-                if any(marker in candidate for marker in ("&&", "||", ";", "|", "\n", "\r")):
+            matches = re.findall(pattern, goal_text, flags=re.IGNORECASE)
+            for candidate in matches:
+                if not candidate:
                     continue
-                if candidate.lower() in {"workspace", "file", "path", "location"}:
+                cleaned = candidate.strip().strip('"\'')
+                if any(marker in cleaned for marker in ("&&", "||", ";", "|", "\n", "\r")):
+                    continue
+                if cleaned.lower() in {"workspace", "file", "path", "location"}:
+                    return str(self.workspace_dir)
+                if cleaned.lower() == "workspace/":
                     return str(self.workspace_dir)
                 try:
-                    return self.tools.resolve_workspace_path(self.workspace_dir, candidate)
+                    return self.tools.resolve_workspace_path(self.workspace_dir, cleaned)
                 except ValueError:
                     continue
         return str(self.workspace_dir)
@@ -97,7 +110,10 @@ class TermuxAgent:
         match = re.search(r"(?:content|text|message)\s*[:=]\s*(.+)", goal, flags=re.IGNORECASE)
         if match:
             content = match.group(1).strip().strip('"\'')
-            return content if content else None
+            if content and not any(marker in content for marker in ("&&", "||", ";", "|", "\n", "\r")):
+                return content
+        if re.search(r"(?:write|create|save|generate)\s+(?:a\s+)?(?:file|text)\b", goal, flags=re.IGNORECASE):
+            return f"Autonomous agent action for: {goal}"
         return None
 
     def _resolve_task_to_action(self, task: str) -> tuple[str, dict[str, Any]]:
@@ -107,15 +123,13 @@ class TermuxAgent:
 
         lowered = cleaned.lower()
         if re.search(r"(write|create|save|generate|make).*file|file.*(write|create|save|generate|make)", lowered):
-            path_match = re.search(r"(?:named|name)\s+([A-Za-z0-9_.\-/]+)", cleaned, flags=re.IGNORECASE)
+            path_match = re.search(r"(?:named|name|in)\s+([A-Za-z0-9_.\-/]+)", cleaned, flags=re.IGNORECASE)
             path_name = path_match.group(1) if path_match else "agent_task.txt"
             target = self.tools.safe_join(self.workspace_dir, path_name)
-            content_match = re.search(r"with content\s*(.+)$|content\s*[:=]\s*(.+)$", cleaned, flags=re.IGNORECASE)
+            content_match = re.search(r"(?:with\s+content|content|text|message)\s*[:=]?\s*(.+)$", cleaned, flags=re.IGNORECASE)
             content = (
-                content_match.group(1)
+                content_match.group(1).strip().strip('"\'')
                 if content_match and content_match.group(1)
-                else content_match.group(2)
-                if content_match
                 else f"Task generated by TermuxAgent: {cleaned}\n"
             )
             return "write_file", {"path": target, "content": content}
@@ -341,7 +355,10 @@ class TermuxAgent:
                 previous = self._run_single_goal(subtask, max_cycles=max_cycles, prior_context=prior_context)
                 combined.append({"index": idx, "task": subtask, "result": previous})
                 sequence_history.extend(previous.get("history", []))
-                prior_context = f"Completed subtask #{idx}: {subtask} ({previous.get('status')})"
+                prior_context = (
+                    f"Completed subtask #{idx}: {subtask} ({previous.get('status')}) | "
+                    f"last result: {self._summarize_result(previous)}"
+                )
             return {
                 "status": "completed",
                 "goal": task_text,

@@ -177,7 +177,12 @@ class ToolExecutor:
         elif Path(raw).is_absolute():
             resolved = Path(raw)
         else:
-            resolved = (root_path / raw).resolve()
+            normalized = raw
+            if normalized.startswith(f"{root_path.name}/"):
+                normalized = normalized[len(root_path.name) + 1 :]
+            if normalized.startswith("./"):
+                normalized = normalized[2:]
+            resolved = (root_path / normalized).resolve()
 
         if root_path not in resolved.parents and resolved != root_path:
             raise ValueError(f"Path escapes workspace root: {candidate}")
