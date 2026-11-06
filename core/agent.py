@@ -96,22 +96,23 @@ class TermuxAgent:
         if not goal_text:
             return str(self.workspace_dir)
 
-        stripped = re.sub(r"\s+(?:and\s+then|then|und\s+dann|dann|;|, )\s+", " ", goal_text, flags=re.IGNORECASE)
         for pattern in [
-            r"(?:named|name|in|at|to|from|of)\s+([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*\.[A-Za-z0-9]{1,20})",
-            r"(?:workspace|~?/)?[A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*\.[A-Za-z0-9]{1,20}",
-            r"(?:workspace|~?/)[A-Za-z0-9_.\-/]+",
+            r"(?:named|name|called|in|at|to|from|of|mit|für|datei|file)\s+([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)+(?:\.[A-Za-z0-9_.\-]+)?)",
+            r"([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)+(?:\.[A-Za-z0-9_.\-]+)?)",
+            r"(?:workspace|~?/)[A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*",
         ]:
-            matches = re.findall(pattern, stripped, flags=re.IGNORECASE)
+            matches = re.findall(pattern, goal_text, flags=re.IGNORECASE)
             if not matches:
                 continue
             for candidate in matches:
-                cleaned = candidate.strip().strip('"\'')
+                cleaned = str(candidate).strip().strip('"\'')
                 if not cleaned or any(marker in cleaned for marker in ("&&", "||", "|", "\n", "\r")):
                     continue
-                if cleaned.lower() in {"workspace", "file", "path", "location"}:
+                if cleaned.lower() in {"workspace", "file", "datei", "path", "location", "folder", "ordner", "verzeichnis"}:
                     return str(self.workspace_dir)
-                if re.search(r"\b(?:and\s+then|then|und\s+dann|dann|read|write|create|save|show|list|open|inspect|print|display|file)\b", cleaned, flags=re.IGNORECASE):
+                if re.search(r"\b(?:and\s+then|then|und\s+dann|dann|read|write|create|save|show|list|open|inspect|print|display|file|datei|lies|lese|zeige|schreibe|erstelle|speichere|content|text|message)\b", cleaned, flags=re.IGNORECASE):
+                    continue
+                if not ("/" in cleaned or cleaned.startswith("workspace") or cleaned.startswith("./") or cleaned.endswith((".txt", ".md", ".json", ".log", ".dat"))):
                     continue
                 try:
                     return self.tools.resolve_workspace_path(self.workspace_dir, cleaned)
@@ -120,17 +121,23 @@ class TermuxAgent:
         return str(self.workspace_dir)
 
     def _extract_content(self, goal: str) -> str | None:
-        match = re.search(r"(?:content|text|message)\s*[:=]\s*(.+)", goal, flags=re.IGNORECASE)
+        quoted = re.search(r"[\'\"]([^\'\"]+)[\'\"]", goal)
+        if quoted:
+            content = quoted.group(1).strip()
+            if content and not any(marker in content for marker in ("&&", "||", "|", "\n", "\r")):
+                return content
+
+        match = re.search(r"(?:content|text|message|inhalt)\s*[:=]\s*(.+)", goal, flags=re.IGNORECASE)
         if match:
             content = match.group(1).strip().strip('"\'')
             if content and not any(marker in content for marker in ("&&", "||", "|", "\n", "\r")):
                 return content
-        content_after = re.search(r"(?:with\s+content|content|text|message)\s+(?:is\s+)?(.+?)(?:\s*(?:and\s+then|then|und\s+dann|dann|;|,\s*(?:read|write|create|save|generate|show|list|open|print|inspect|display)|$))", goal, flags=re.IGNORECASE)
+        content_after = re.search(r"(?:with\s+content|mit\s+content|content|text|message|inhalt)\s+(?:is\s+)?(.+?)(?:\s*(?:and\s+then|then|und\s+dann|dann|;|,\s*(?:read|write|create|save|generate|show|list|open|print|inspect|display|lies|lese|zeige|schreibe|erstelle|speichere)|$))", goal, flags=re.IGNORECASE)
         if content_after:
             candidate = content_after.group(1).strip().strip('"\'')
             if candidate and not any(marker in candidate for marker in ("&&", "||", "|", "\n", "\r")):
                 return candidate
-        if re.search(r"(?:write|create|save|generate)\s+(?:a\s+)?(?:file|text)\b", goal, flags=re.IGNORECASE):
+        if re.search(r"(?:write|create|save|generate|schreibe|erstelle|speichere)\s+(?:a\s+)?(?:file|text|datei)\b", goal, flags=re.IGNORECASE):
             return f"Autonomous agent action for: {goal}"
         return None
 
