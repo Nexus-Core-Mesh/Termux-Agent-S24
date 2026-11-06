@@ -1,0 +1,62 @@
+{
+  "actions": [
+    {
+      "action": "agent_initialized",
+      "details": {
+        "workspace": "workspace"
+      },
+      "timestamp": "2026-11-06T20:34:42.971736+00:00"
+    },
+    {
+      "action": "command_started",
+      "details": {
+        "command": [
+          "echo",
+          "ok"
+        ]
+      },
+      "timestamp": "2026-11-06T20:34:42.971940+00:00"
+    },
+    {
+      "action": "run_once",
+      "details": {
+        "result": {
+          "command": [
+            "echo",
+            "ok"
+          ],
+          "returncode": 0,
+          "stderr": "",
+          "stdout": "ok\n"
+        },
+        "status": "command_executed",
+        "task": "smoke test"
+      },
+      "timestamp": "2026-11-06T20:34:42.974642+00:00"
+    }
+  ],
+  "state": {
+    "last_command": {
+      "command": [
+        "echo",
+        "ok"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "ok\n"
+    },
+    "last_run": {
+      "result": {
+        "command": [
+          "echo",
+          "ok"
+        ],
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "ok\n"
+      },
+      "status": "command_executed",
+      "task": "smoke test"
+    }
+  }
+}
