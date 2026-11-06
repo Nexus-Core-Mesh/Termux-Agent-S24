@@ -1611,9 +1611,38 @@
       },
       "id": 151,
       "timestamp": "2026-11-06T21:49:36.921308+00:00"
+    },
+    {
+      "action": "agent_initialized",
+      "details": {
+        "llm_backend": "fallback",
+        "workspace": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace"
+      },
+      "id": 152,
+      "timestamp": "2026-11-06T22:05:49.364430+00:00"
+    },
+    {
+      "action": "agent_initialized",
+      "details": {
+        "llm_backend": "fallback",
+        "workspace": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace"
+      },
+      "id": 153,
+      "timestamp": "2026-11-06T22:06:01.883832+00:00"
+    },
+    {
+      "action": "local_inference",
+      "details": {
+        "available": false,
+        "backend": "fallback",
+        "prompt": "hello",
+        "source": "fallback"
+      },
+      "id": 154,
+      "timestamp": "2026-11-06T22:06:01.889292+00:00"
     }
   ],
-  "created_at": "2026-11-06T21:49:36.144053+00:00",
+  "created_at": "2026-11-06T22:06:01.883354+00:00",
   "goals": [
     {
       "created_at": "2026-11-06T20:43:24.605935+00:00",
@@ -5607,5 +5636,5 @@
     "next_step": null
   },
   "status": "initialized",
-  "updated_at": "2026-11-06T21:49:36.926312+00:00"
+  "updated_at": "2026-11-06T22:06:01.889299+00:00"
 }

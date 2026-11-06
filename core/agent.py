@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .llm import LocalLLMBackend
 from .memory import MemoryManager
 from .tools import ToolExecutor, http_get
 
@@ -19,12 +20,14 @@ class TermuxAgent:
         workspace_dir: str | Path = "workspace",
         memory_path: str | Path | None = None,
         allowed_commands: list[str] | None = None,
+        llm_backend: LocalLLMBackend | None = None,
     ) -> None:
         self.workspace_dir = Path(workspace_dir).resolve()
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.memory = MemoryManager(memory_path or self.workspace_dir / "memory.json")
         self.tools = ToolExecutor(allowed_commands=allowed_commands)
-        self.memory.log_action("agent_initialized", workspace=str(self.workspace_dir))
+        self.llm_backend = llm_backend or LocalLLMBackend()
+        self.memory.log_action("agent_initialized", workspace=str(self.workspace_dir), llm_backend=str(self.llm_backend.config.source))
 
     def execute_command(
         self,
@@ -509,5 +512,36 @@ class TermuxAgent:
         self.memory.update_state("last_loop", summary)
         return summary
 
+    def local_inference(
+        self,
+        prompt: str,
+        *,
+        timeout: int = 30,
+        max_tokens: int = 128,
+        temperature: float = 0.2,
+        fallback: str | None = None,
+    ) -> dict[str, Any]:
+        if not prompt or not prompt.strip():
+            return {"ok": False, "backend": self.llm_backend.config.source, "available": False, "content": "", "error": "empty prompt"}
+        result = self.llm_backend.infer(
+            prompt,
+            timeout=timeout,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            fallback=fallback,
+        )
+        self.memory.log_action("local_inference", prompt=prompt[:200], backend=result.get("backend"), available=result.get("available"), source=result.get("source"))
+        return result
+
     def status(self) -> dict[str, Any]:
-        return {"workspace": str(self.workspace_dir), "state": self.memory.get_state(), "context": self.memory.get_recent_context()}
+        return {
+            "workspace": str(self.workspace_dir),
+            "state": self.memory.get_state(),
+            "context": self.memory.get_recent_context(),
+            "llm_backend": {
+                "source": self.llm_backend.config.source,
+                "available": self.llm_backend.is_available(),
+                "binary_path": self.llm_backend.config.binary_path,
+                "model_path": self.llm_backend.config.model_path,
+            },
+        }
