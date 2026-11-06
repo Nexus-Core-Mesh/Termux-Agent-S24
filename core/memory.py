@@ -9,20 +9,34 @@ from typing import Any
 
 
 class MemoryManager:
-    """Simple local memory store for agent state and action history."""
+    """Structured local memory store for goals, actions, and long-running context."""
 
     def __init__(self, memory_path: str | Path = "workspace/memory.json"):
         self.memory_path = Path(memory_path)
         self.memory_path.parent.mkdir(parents=True, exist_ok=True)
         self.data = self._load()
 
+    def _now_iso(self) -> str:
+        return datetime.now(timezone.utc).isoformat()
+
     def _default_state(self) -> dict[str, Any]:
-        return {"state": {}, "actions": []}
+        now = self._now_iso()
+        return {
+            "schema_version": "1.0",
+            "created_at": now,
+            "updated_at": now,
+            "status": "initialized",
+            "goals": [],
+            "state": {},
+            "history": [],
+            "actions": [],
+        }
 
     def _load(self) -> dict[str, Any]:
         if not self.memory_path.exists():
-            self._save(self._default_state())
-            return self._default_state()
+            fresh = self._default_state()
+            self._save(fresh)
+            return fresh
 
         with self.memory_path.open("r", encoding="utf-8") as handle:
             try:
@@ -34,11 +48,15 @@ class MemoryManager:
             raw_data = {}
 
         normalized = self._default_state()
-        normalized["state"] = raw_data.get("state", {}) if isinstance(raw_data.get("state", {}), dict) else {}
-        normalized["actions"] = raw_data.get("actions", []) if isinstance(raw_data.get("actions", []), list) else []
+        for key in ("state", "goals", "history", "actions"):
+            if isinstance(raw_data.get(key), type(normalized[key])):
+                normalized[key] = raw_data[key]
+        normalized["status"] = str(raw_data.get("status", "initialized"))
+        normalized["updated_at"] = str(raw_data.get("updated_at", normalized["updated_at"]))
         return normalized
 
     def _save(self, data: dict[str, Any]) -> dict[str, Any]:
+        data["updated_at"] = self._now_iso()
         with self.memory_path.open("w", encoding="utf-8") as handle:
             json.dump(data, handle, indent=2, sort_keys=True)
             handle.write("\n")
@@ -48,13 +66,55 @@ class MemoryManager:
     def save(self) -> dict[str, Any]:
         return self._save(self.data)
 
-    def log_action(self, action: str, **details: Any) -> dict[str, Any]:
+    def record_goal(self, goal: str, **details: Any) -> dict[str, Any]:
         entry = {
-            "action": action,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "goal": goal,
+            "status": "active",
+            "created_at": self._now_iso(),
             "details": details,
         }
-        self.data.setdefault("actions", []).append(entry)
+        existing = self.data.setdefault("goals", [])
+        existing.append(entry)
+        self.update_state("current_goal", goal)
+        self.save()
+        return entry
+
+    def log_action(self, action: str, **details: Any) -> dict[str, Any]:
+        entry = {
+            "id": len(self.data.setdefault("actions", [])) + 1,
+            "action": action,
+            "timestamp": self._now_iso(),
+            "details": details,
+        }
+        self.data["actions"].append(entry)
+        self.save()
+        return entry
+
+    def add_cycle(
+        self,
+        *,
+        cycle: int,
+        goal: str,
+        thought: str,
+        action: dict[str, Any],
+        result: dict[str, Any],
+        reflection: str,
+        next_step: str | None = None,
+    ) -> dict[str, Any]:
+        entry = {
+            "cycle": cycle,
+            "goal": goal,
+            "thought": thought,
+            "action": action,
+            "result": result,
+            "reflection": reflection,
+            "next_step": next_step,
+            "timestamp": self._now_iso(),
+        }
+        self.data.setdefault("history", []).append(entry)
+        self.update_state("last_cycle", cycle)
+        self.update_state("last_reflection", reflection)
+        self.update_state("next_step", next_step)
         self.save()
         return entry
 
@@ -64,9 +124,19 @@ class MemoryManager:
         return value
 
     def get_state(self, key: str | None = None) -> Any:
+        state = self.data.get("state", {})
         if key is None:
-            return self.data.get("state", {})
-        return self.data.get("state", {}).get(key)
+            return state
+        return state.get(key)
+
+    def get_recent_context(self, limit: int = 5) -> dict[str, Any]:
+        history = self.data.get("history", [])
+        return {
+            "current_goal": self.get_state("current_goal"),
+            "last_reflection": self.get_state("last_reflection"),
+            "next_step": self.get_state("next_step"),
+            "recent_history": history[-limit:],
+        }
 
     def reset(self) -> dict[str, Any]:
         fresh = self._default_state()
