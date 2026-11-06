@@ -180,7 +180,13 @@ class TermuxAgent:
             "action": {"name": action_name, "params": params},
             "result": result,
         }
-        self.memory.log_action("run_once", **payload)
+        self.memory.log_action(
+            "run_once",
+            status=payload["status"],
+            task=payload["task"],
+            tool_action=payload["action"],
+            result=payload["result"],
+        )
         self.memory.update_state("last_run", payload)
         return payload
 
