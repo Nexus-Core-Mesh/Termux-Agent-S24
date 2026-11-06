@@ -41,9 +41,25 @@
       },
       "id": 4,
       "timestamp": "2026-11-06T20:43:24.605553+00:00"
+    },
+    {
+      "action": "agent_initialized",
+      "details": {
+        "workspace": "workspace"
+      },
+      "id": 5,
+      "timestamp": "2026-11-06T20:49:33.497997+00:00"
+    },
+    {
+      "action": "agent_initialized",
+      "details": {
+        "workspace": "workspace"
+      },
+      "id": 6,
+      "timestamp": "2026-11-06T20:49:33.643607+00:00"
     }
   ],
-  "created_at": "2026-11-06T20:43:24.605525+00:00",
+  "created_at": "2026-11-06T20:49:33.643574+00:00",
   "goals": [
     {
       "created_at": "2026-11-06T20:43:24.605935+00:00",
@@ -128,5 +144,5 @@
     "next_step": null
   },
   "status": "initialized",
-  "updated_at": "2026-11-06T20:43:24.609080+00:00"
+  "updated_at": "2026-11-06T20:49:33.643612+00:00"
 }

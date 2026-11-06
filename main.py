@@ -10,7 +10,7 @@ from core.agent import TermuxAgent
 
 
 def _run_once(agent: TermuxAgent, task: str, cycles: int) -> dict:
-    return agent.run_autonomous(task, max_cycles=cycles)
+    return agent.run_once(task=task) if task else agent.run_autonomous(task, max_cycles=cycles)
 
 
 def main() -> None:
@@ -22,7 +22,8 @@ def main() -> None:
     agent = TermuxAgent(workspace_dir="workspace")
 
     if args.task:
-        print(json.dumps(_run_once(agent, args.task, args.cycles), indent=2, ensure_ascii=False))
+        result = _run_once(agent, args.task, args.cycles)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
         return
 
     print("Termux Agent S24 ready. Enter goals or 'exit' to quit.")
