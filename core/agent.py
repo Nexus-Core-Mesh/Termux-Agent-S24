@@ -136,9 +136,14 @@ class TermuxAgent:
 
     @staticmethod
     def _extract_limit(goal: str) -> int | None:
-        match = re.search(r"(?:first|last|only)\s+(?:the\s+)?(\d+)\s+(?:chars?|characters|bytes?)", goal, flags=re.IGNORECASE)
-        if match:
-            return max(0, int(match.group(1)))
+        patterns = [
+            r"(?:first|last|only|nur|ersten|letzten)\s+(?:the\s+)?(?:die\s+)?(\d+)\s+(?:chars?|characters|bytes?|zeichen)",
+            r"(?:first|last|only|nur|ersten|letzten)\s+(?:the\s+)?(\d+)\s+(?:chars?|characters|bytes?|zeichen)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, goal, flags=re.IGNORECASE)
+            if match:
+                return max(0, int(match.group(1)))
         return None
 
     def _resolve_task_to_action(self, task: str) -> tuple[str, dict[str, Any]]:
@@ -147,14 +152,16 @@ class TermuxAgent:
             return "run_command", {"command": ["echo", "agent idle"]}
 
         lowered = cleaned.lower()
-        slice_match = re.search(r"(?:first|last|only)\s+(?:the\s+)?(\d+)\s+(?:chars?|characters|bytes?)", cleaned, flags=re.IGNORECASE)
-        limit = int(slice_match.group(1)) if slice_match else None
+        slice_match = self._extract_limit(cleaned)
+        limit = slice_match
 
-        if re.search(r"(?:write|create|save|generate|make).*file|file.*(?:write|create|save|generate|make)", lowered):
-            path_match = re.search(r"(?:named|name|in|at|to|for)\s+([A-Za-z0-9_.\-/]+)", cleaned, flags=re.IGNORECASE)
+        write_pattern = re.search(r"(?:write|create|save|generate|make|schreibe|schreiben|erstelle|erstellen|speichere|speichern|erzeuge|generiere)", lowered)
+        read_pattern = re.search(r"(?:read|open|show|cat|inspect|view|list|lies|lese|zeige|anzeigen|ansehen|öffne|öffnen|liste)", lowered)
+        if write_pattern and ("file" in lowered or "datei" in lowered or "text" in lowered or "content" in lowered or "message" in lowered):
+            path_match = re.search(r"(?:named|name|in|at|to|for|datei|file)\s+([A-Za-z0-9_.\-/]+)", cleaned, flags=re.IGNORECASE)
             path_name = path_match.group(1) if path_match else "agent_task.txt"
             target = self.tools.safe_join(self.workspace_dir, path_name)
-            content_match = re.search(r"(?:with\s+content|content|text|message)\s*[:=]?\s*(.+?)(?:\s*(?:and\s+then|then|und\s+dann|dann|;|,\s*(?:read|write|create|save|generate|show|list|open|print|inspect|display))|$)", cleaned, flags=re.IGNORECASE)
+            content_match = re.search(r"(?:with\s+content|content|text|message)\s*[:=]?\s*(.+?)(?:\s*(?:and\s+then|then|und\s+dann|dann|;|,\s*(?:read|write|create|save|generate|show|list|open|print|inspect|display|lies|lese|zeige|schreibe|erstelle|speichere))|$)", cleaned, flags=re.IGNORECASE)
             content = (
                 content_match.group(1).strip().strip('"\'')
                 if content_match and content_match.group(1)
@@ -162,13 +169,13 @@ class TermuxAgent:
             )
             return "write_file", {"path": target, "content": content}
 
-        if re.search(r"(?:read|open|show|cat|inspect|view|list)\s+(?:file|the file|content|workspace)", lowered):
+        if read_pattern and ("file" in lowered or "datei" in lowered or "workspace" in lowered or "content" in lowered or "read" in lowered or "lies" in lowered or "lese" in lowered):
             path = self._extract_path(cleaned)
             if limit is not None:
                 return "read_file", {"path": path, "limit": limit}
             return "read_file", {"path": path}
 
-        if re.search(r"(?:list|ls|dir|show directory|workspace)", lowered):
+        if re.search(r"(?:list|ls|dir|show directory|workspace|ordner|verzeichnis)", lowered):
             return "list_dir", {"path": str(self.workspace_dir)}
 
         if re.search(r"(?:http|https|api|fetch|request|url)", lowered):
