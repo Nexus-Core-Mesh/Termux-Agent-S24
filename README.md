@@ -10,12 +10,14 @@ This repository provides a compact local agent architecture with:
 - a JSON-backed memory manager for keeping persistent state and execution history in `workspace/memory.json`
 - a ReAct-style execution loop with reasoning, action execution, observation and self-correction
 - a simple CLI entrypoint for one-shot and interactive task execution
+- an optional local LLM bridge for llama.cpp and Qwen on the device, with a transparent fallback when local inference is unavailable
 
 ## Project structure
 
 - `core/tools.py` — safe subprocess execution, path validation, file read/write helpers and lightweight HTTP access
 - `core/memory.py` — persistent workspace memory and action history storage
 - `core/agent.py` — task parsing, multi-step execution loop and autonomous decision logic
+- `core/llm.py` — optional local llama.cpp / llama-server + Qwen detection and bridge support with clean fallback behavior
 - `main.py` — interactive and direct task CLI entrypoint
 - `workspace/` — local runtime state, memory and generated artifacts
 
