@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -193,6 +194,15 @@ class TermuxAgent:
                 previous_content = last_result.get("content") or last_result.get("stdout") or last_result.get("body")
                 if isinstance(previous_content, dict):
                     previous_content = json.dumps(previous_content, ensure_ascii=False)
+            if previous_content is None:
+                previous_content = self.memory.get_state("last_content")
+            if previous_content is None:
+                previous_path = self.memory.get_state("last_file_path")
+                if previous_path:
+                    try:
+                        previous_content = self.tools.read_file(previous_path)
+                    except (FileNotFoundError, OSError):
+                        previous_content = None
             if previous_content is not None:
                 return "slice_output", {"text": str(previous_content), "limit": limit}
 
@@ -210,6 +220,10 @@ class TermuxAgent:
                 path = last_result.get("path") if isinstance(last_result, dict) else None
             if path is None:
                 path = self.memory.get_state("last_file_path") or str(self.workspace_dir / "notes.txt")
+            if path == str(self.workspace_dir) and re.search(r"(?:show|print|display)\s+(?:only\s+)?(?:the\s+)?(?:first|last)", lowered):
+                previous_content = self.memory.get_state("last_content")
+                if previous_content is not None:
+                    return "slice_output", {"text": str(previous_content), "limit": limit}
             payload = {"path": path}
             if limit is not None:
                 payload["limit"] = limit
@@ -228,6 +242,8 @@ class TermuxAgent:
         if action_name == "read_file":
             try:
                 content = self.tools.read_file(params["path"])
+                self.memory.update_state("last_file_path", params["path"])
+                self.memory.update_state("last_content", content)
                 limit = params.get("limit")
                 if limit is not None:
                     content = content[: int(limit)]
@@ -239,9 +255,12 @@ class TermuxAgent:
             limit = params.get("limit")
             if limit is not None:
                 text = text[: int(limit)]
+            self.memory.update_state("last_content", text)
             return {"ok": True, "content": text}
         if action_name == "write_file":
             path = self.tools.write_file(params["path"], params["content"])
+            self.memory.update_state("last_file_path", path)
+            self.memory.update_state("last_content", params["content"])
             return {"ok": True, "path": path, "bytes_written": len(params["content"])}
         if action_name == "list_dir":
             return {"ok": True, "entries": self.tools.list_dir(params["path"])}
@@ -318,13 +337,13 @@ class TermuxAgent:
         self.memory.update_state("last_run", payload)
         return payload
 
-    def _run_single_goal(self, goal: str, max_cycles: int = 5, prior_context: str = "") -> dict[str, Any]:
+    def _run_single_goal(self, goal: str, max_cycles: int = 5, prior_context: str = "", initial_result: dict[str, Any] | None = None) -> dict[str, Any]:
         if not goal or not goal.strip():
             return {"status": "empty_goal", "goal": goal, "cycles": 0, "history": []}
 
         self.memory.record_goal(goal)
         steps: list[dict[str, Any]] = []
-        last_result: dict[str, Any] | None = None
+        last_result: dict[str, Any] | None = initial_result
         completed = False
         current_goal = goal.strip()
 
@@ -394,13 +413,15 @@ class TermuxAgent:
             sequence_history: list[dict[str, Any]] = []
             combined: list[dict[str, Any]] = []
             prior_context = ""
+            previous_result: dict[str, Any] | None = None
             for idx, subtask in enumerate(subtasks, 1):
-                previous = self._run_single_goal(subtask, max_cycles=max_cycles, prior_context=prior_context)
+                previous = self._run_single_goal(subtask, max_cycles=max_cycles, prior_context=prior_context, initial_result=previous_result)
                 combined.append({"index": idx, "task": subtask, "result": previous})
                 sequence_history.extend(previous.get("history", []))
+                previous_result = previous.get("history", [{}])[-1].get("result") if previous.get("history") else previous
                 prior_context = (
                     f"Completed subtask #{idx}: {subtask} ({previous.get('status')}) | "
-                    f"last result: {self._summarize_result(previous)}"
+                    f"last result: {self._summarize_result(previous_result or previous)}"
                 )
             return {
                 "status": "completed",
