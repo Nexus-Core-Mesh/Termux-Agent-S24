@@ -94,6 +94,42 @@ class TermuxAgent:
             return f"{status}; content={str(content)[:80]}"
         return status
 
+    def _get_latest_file_path(self) -> str | None:
+        for source in (self.memory.get_state("last_file_path"), self.memory.get_state("last_path")):
+            if isinstance(source, str) and source.strip():
+                return source.strip()
+
+        history = self.memory.data.get("history", [])
+        for item in reversed(history):
+            action = item.get("action") if isinstance(item, dict) else {}
+            if not isinstance(action, dict):
+                continue
+            result = item.get("result", {}) if isinstance(item, dict) else {}
+            if isinstance(result, dict):
+                path = result.get("path") or result.get("file")
+                if isinstance(path, str) and path.strip():
+                    return path.strip()
+                if isinstance(action, dict):
+                    params = action.get("params", {})
+                    if isinstance(params, dict):
+                        candidate = params.get("path")
+                        if isinstance(candidate, str) and candidate.strip():
+                            return candidate.strip()
+        return None
+
+    def _guarded_read_target(self, goal: str, explicit_path: str | None = None) -> str:
+        if explicit_path:
+            return explicit_path
+
+        inherited = self._get_latest_file_path()
+        if inherited:
+            return inherited
+
+        if "read it back" in goal.lower() or "read it" in goal.lower() or "read back" in goal.lower():
+            return str(self.workspace_dir)
+
+        return str(self.workspace_dir)
+
     def _extract_path(self, goal: str) -> str | None:
         goal_text = (goal or "").strip()
         if not goal_text:
@@ -213,7 +249,10 @@ class TermuxAgent:
             return "write_file", {"path": target, "content": content}
 
         if read_pattern and ("file" in lowered or "datei" in lowered or "workspace" in lowered or "content" in lowered or "read" in lowered or "lies" in lowered or "lese" in lowered or file_like_hint):
-            path = self._extract_path(cleaned)
+            inherited_path = self._get_latest_file_path()
+            path = self._extract_path(cleaned) or inherited_path or str(self.workspace_dir)
+            if ("read it back" in lowered or "read back" in lowered or "read it" in lowered or "lies it back" in lowered or "lies es zurück" in lowered) and inherited_path:
+                path = inherited_path
             if limit is not None:
                 return "read_file", {"path": path, "limit": limit}
             return "read_file", {"path": path}
@@ -301,6 +340,10 @@ class TermuxAgent:
         if re.search(r"(system|status|info|platform|uname)", lowered):
             return "system_info", {}
         if last_result and not (last_result.get("ok") or last_result.get("returncode") == 0):
+            if "directory" in str(last_result.get("error") or "").lower() or "read_file" in str(last_result.get("guidance") or "").lower():
+                fallback_path = self._get_latest_file_path()
+                if fallback_path:
+                    return "read_file", {"path": fallback_path}
             return "list_dir", {"path": str(self.workspace_dir)}
         return "run_command", {"command": ["echo", f"agent task: {goal}"]}
 
@@ -311,9 +354,24 @@ class TermuxAgent:
             path_value = params.get("path") or str(self.workspace_dir)
             try:
                 if Path(path_value).is_dir():
-                    return {"ok": False, "error": f"Path is a directory, not a file: {path_value}"}
+                    fallback_path = self._get_latest_file_path()
+                    if fallback_path:
+                        self.memory.update_state("last_path", fallback_path)
+                        self.memory.update_state("last_file_path", fallback_path)
+                        return {
+                            "ok": False,
+                            "error": "Provided path is a directory. Use list_dir for directories or append the target filename.",
+                            "fallback_path": fallback_path,
+                            "guidance": "When a task asks to read back a file created previously, use the exact file path from the previous step's observation result. Never use read_file on a directory.",
+                        }
+                    return {
+                        "ok": False,
+                        "error": "Provided path is a directory. Use list_dir for directories or append the target filename.",
+                        "guidance": "When a task asks to read back a file created previously, use the exact file path from the previous step's observation result. Never use read_file on a directory.",
+                    }
                 content = self.tools.read_file(path_value)
                 self.memory.update_state("last_file_path", path_value)
+                self.memory.update_state("last_path", path_value)
                 self.memory.update_state("last_content", content)
                 limit = params.get("limit")
                 if limit is not None:
@@ -322,7 +380,7 @@ class TermuxAgent:
             except FileNotFoundError:
                 return {"ok": False, "error": f"File not found: {path_value}"}
             except (OSError, IsADirectoryError):
-                return {"ok": False, "error": f"Unable to read file: {path_value}"}
+                return {"ok": False, "error": "Provided path is a directory. Use list_dir for directories or append the target filename.", "guidance": "When a task asks to read back a file created previously, use the exact file path from the previous step's observation result. Never use read_file on a directory."}
         if action_name == "slice_output":
             text = str(params.get("text", ""))
             limit = params.get("limit")
@@ -354,7 +412,7 @@ class TermuxAgent:
 
         if "read" in goal.lower() or "open" in goal.lower() or "file" in goal.lower():
             if isinstance(result, dict) and "directory" in str(result.get("error") or "").lower():
-                return "FILE vs DIRECTORY RULE: use read_file only for files; use list_dir for directories. Never pass a directory path to read_file.", "list workspace contents and then read the exact target file path", False
+                return "FILE vs DIRECTORY RULE: use read_file only for files; use list_dir for directories. Never pass a directory path to read_file. When a task asks to read back a file created previously, use the exact file path from the previous step's observation result.", "list workspace contents and then read the exact target file path from the previous step's result", False
             return "The file operation failed; verify whether the path exists and adjust the plan.", "inspect workspace files", False
         return "The previous step did not complete successfully; self-correct by trying a safer or more specific step.", "re-evaluate with a more precise action", False
 
