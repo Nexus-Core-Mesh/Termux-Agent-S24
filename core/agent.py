@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .llm import LocalLLMBackend
 from .memory import MemoryManager
 from .tools import ToolExecutor, http_get
 
@@ -19,12 +20,14 @@ class TermuxAgent:
         workspace_dir: str | Path = "workspace",
         memory_path: str | Path | None = None,
         allowed_commands: list[str] | None = None,
+        llm_backend: LocalLLMBackend | None = None,
     ) -> None:
         self.workspace_dir = Path(workspace_dir).resolve()
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.memory = MemoryManager(memory_path or self.workspace_dir / "memory.json")
         self.tools = ToolExecutor(allowed_commands=allowed_commands)
-        self.memory.log_action("agent_initialized", workspace=str(self.workspace_dir))
+        self.llm_backend = llm_backend or LocalLLMBackend()
+        self.memory.log_action("agent_initialized", workspace=str(self.workspace_dir), llm_backend=str(self.llm_backend.config.source))
 
     def execute_command(
         self,
@@ -96,44 +99,77 @@ class TermuxAgent:
         if not goal_text:
             return str(self.workspace_dir)
 
-        stripped = re.sub(r"\s+(?:and\s+then|then|und\s+dann|dann|;|, )\s+", " ", goal_text, flags=re.IGNORECASE)
-        for pattern in [
-            r"(?:named|name|in|at|to|from|of)\s+([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*\.[A-Za-z0-9]{1,20})",
-            r"(?:workspace|~?/)?[A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*\.[A-Za-z0-9]{1,20}",
-            r"(?:workspace|~?/)[A-Za-z0-9_.\-/]+",
-        ]:
-            matches = re.findall(pattern, stripped, flags=re.IGNORECASE)
+        explicit_patterns = [
+            r"(?:named|name|called|in|at|to|from|of|mit|für|in\s+workspace|datei|file)\s+([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*(?:\.[A-Za-z0-9_.\-]+)?)",
+            r"(?:workspace|~?/)?[A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*(?:\.[A-Za-z0-9_.\-]+)?",
+        ]
+
+        for pattern in explicit_patterns:
+            matches = re.findall(pattern, goal_text, flags=re.IGNORECASE)
             if not matches:
                 continue
             for candidate in matches:
-                cleaned = candidate.strip().strip('"\'')
+                cleaned = str(candidate).strip().strip('"\'')
                 if not cleaned or any(marker in cleaned for marker in ("&&", "||", "|", "\n", "\r")):
                     continue
-                if cleaned.lower() in {"workspace", "file", "path", "location"}:
+                if cleaned.lower() in {"workspace", "file", "datei", "path", "location", "folder", "ordner", "verzeichnis"}:
                     return str(self.workspace_dir)
-                if re.search(r"\b(?:and\s+then|then|und\s+dann|dann|read|write|create|save|show|list|open|inspect|print|display|file)\b", cleaned, flags=re.IGNORECASE):
+                if re.search(r"\b(?:and\s+then|then|und\s+dann|dann|read|write|create|save|show|list|open|inspect|print|display|file|datei|lies|lese|zeige|schreibe|erstelle|speichere|content|text|message|mit|inhalt)\b", cleaned, flags=re.IGNORECASE):
+                    continue
+                if not ("/" in cleaned or cleaned.startswith("workspace") or cleaned.startswith("./") or cleaned.endswith((".txt", ".md", ".json", ".log", ".dat", ".csv"))):
                     continue
                 try:
                     return self.tools.resolve_workspace_path(self.workspace_dir, cleaned)
                 except ValueError:
                     continue
+
+        fallback = re.search(r"workspace(?:/[A-Za-z0-9_.\-/]+)+", goal_text, flags=re.IGNORECASE)
+        if fallback:
+            try:
+                return self.tools.resolve_workspace_path(self.workspace_dir, fallback.group(0))
+            except ValueError:
+                pass
         return str(self.workspace_dir)
 
     def _extract_content(self, goal: str) -> str | None:
-        match = re.search(r"(?:content|text|message)\s*[:=]\s*(.+)", goal, flags=re.IGNORECASE)
+        quoted = re.search(r"[\'\"]([^\'\"]+)[\'\"]", goal)
+        if quoted:
+            content = quoted.group(1).strip()
+            if content and not any(marker in content for marker in ("&&", "||", "|", "\n", "\r")):
+                return content
+
+        match = re.search(r"(?:content|text|message|inhalt)\s*[:=]\s*(.+)", goal, flags=re.IGNORECASE)
         if match:
             content = match.group(1).strip().strip('"\'')
             if content and not any(marker in content for marker in ("&&", "||", "|", "\n", "\r")):
                 return content
-        content_after = re.search(r"(?:with\s+content|content|text|message)\s+(?:is\s+)?(.+?)(?:\s*(?:and\s+then|then|und\s+dann|dann|;|,\s*(?:read|write|create|save|generate|show|list|open|print|inspect|display)|$))", goal, flags=re.IGNORECASE)
+        content_after = re.search(r"(?:with\s+content|mit\s+content|content|text|message|inhalt)\s+(?:is\s+)?(.+?)(?:\s*(?:and\s+then|then|und\s+dann|dann|;|,\s*(?:read|write|create|save|generate|show|list|open|print|inspect|display|lies|lese|zeige|schreibe|erstelle|speichere)|$))", goal, flags=re.IGNORECASE)
         if content_after:
             candidate = content_after.group(1).strip().strip('"\'')
             if candidate and not any(marker in candidate for marker in ("&&", "||", "|", "\n", "\r")):
                 return candidate
-        if re.search(r"(?:write|create|save|generate)\s+(?:a\s+)?(?:file|text)\b", goal, flags=re.IGNORECASE):
-            quoted = re.search(r"[\x27\x22]([^\x27\x22]+)[\x27\x22]", goal)
-            if quoted:
-                return quoted.group(1)
+        if re.search(r"(?:write|create|save|generate|schreibe|erstelle|speichere)\s+(?:a\s+)?(?:file|text|datei)\b", goal, flags=re.IGNORECASE):
+            return f"Autonomous agent action for: {goal}"
+        return None
+
+    def _extract_content(self, goal: str) -> str | None:
+        quoted = re.search(r"[\'\"]([^\'\"]+)[\'\"]", goal)
+        if quoted:
+            content = quoted.group(1).strip()
+            if content and not any(marker in content for marker in ("&&", "||", "|", "\n", "\r")):
+                return content
+
+        match = re.search(r"(?:content|text|message|inhalt)\s*[:=]\s*(.+)", goal, flags=re.IGNORECASE)
+        if match:
+            content = match.group(1).strip().strip('"\'')
+            if content and not any(marker in content for marker in ("&&", "||", "|", "\n", "\r")):
+                return content
+        content_after = re.search(r"(?:with\s+content|mit\s+content|content|text|message|inhalt)\s+(?:is\s+)?(.+?)(?:\s*(?:and\s+then|then|und\s+dann|dann|;|,\s*(?:read|write|create|save|generate|show|list|open|print|inspect|display|lies|lese|zeige|schreibe|erstelle|speichere)|$))", goal, flags=re.IGNORECASE)
+        if content_after:
+            candidate = content_after.group(1).strip().strip('"\'')
+            if candidate and not any(marker in candidate for marker in ("&&", "||", "|", "\n", "\r")):
+                return candidate
+        if re.search(r"(?:write|create|save|generate|schreibe|erstelle|speichere)\s+(?:a\s+)?(?:file|text|datei)\b", goal, flags=re.IGNORECASE):
             return f"Autonomous agent action for: {goal}"
         return None
 
@@ -160,11 +196,15 @@ class TermuxAgent:
 
         write_pattern = re.search(r"(?:write|create|save|generate|make|schreibe|schreiben|erstelle|erstellen|speichere|speichern|erzeuge|generiere)", lowered)
         read_pattern = re.search(r"(?:read|open|show|cat|inspect|view|list|lies|lese|zeige|anzeigen|ansehen|öffne|öffnen|liste)", lowered)
-        if write_pattern and ("file" in lowered or "datei" in lowered or "text" in lowered or "content" in lowered or "message" in lowered):
-            path_match = re.search(r"(?:named|name|in|at|to|for|datei|file)\s+([A-Za-z0-9_.\-/]+)", cleaned, flags=re.IGNORECASE)
-            path_name = path_match.group(1) if path_match else "agent_task.txt"
-            target = self.tools.safe_join(self.workspace_dir, path_name)
-            content_match = re.search(r"(?:with\s+content|content|text|message)\s*[:=]?\s*(.+?)(?:\s*(?:and\s+then|then|und\s+dann|dann|;|,\s*(?:read|write|create|save|generate|show|list|open|print|inspect|display|lies|lese|zeige|schreibe|erstelle|speichere))|$)", cleaned, flags=re.IGNORECASE)
+        file_like_hint = bool(re.search(r"(?:workspace/|\.[A-Za-z0-9]{1,8}\b|file\s+[A-Za-z0-9_.\-/]+|datei\s+[A-Za-z0-9_.\-/]+|in\s+workspace/[A-Za-z0-9_.\-/]+)", cleaned, flags=re.IGNORECASE))
+
+        if write_pattern and ("file" in lowered or "datei" in lowered or "text" in lowered or "content" in lowered or "message" in lowered or file_like_hint):
+            path_match = re.search(r"(?:named|name|called|in|at|to|for|mit|für|datei|file)\s+([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*(?:\.[A-Za-z0-9_.\-]+)?)", cleaned, flags=re.IGNORECASE)
+            if not path_match:
+                path_match = re.search(r"workspace/[A-Za-z0-9_.\-/]+(?:\.[A-Za-z0-9_.\-]+)?", cleaned, flags=re.IGNORECASE)
+            path_name = path_match.group(1) if path_match and path_match.groups() else (path_match.group(0) if path_match else "agent_task.txt")
+            target = self.tools.safe_join(self.workspace_dir, path_name.replace("workspace/", "")) if path_name.startswith("workspace/") else self.tools.safe_join(self.workspace_dir, path_name)
+            content_match = re.search(r"(?:with\s+content|mit\s+content|content|text|message|inhalt)\s*[:=]?\s*(.+?)(?:\s*(?:and\s+then|then|und\s+dann|dann|;|,\s*(?:read|write|create|save|generate|show|list|open|print|inspect|display|lies|lese|zeige|schreibe|erstelle|speichere))|$)", cleaned, flags=re.IGNORECASE)
             content = (
                 content_match.group(1).strip().strip('"\'')
                 if content_match and content_match.group(1)
@@ -172,13 +212,13 @@ class TermuxAgent:
             )
             return "write_file", {"path": target, "content": content}
 
-        if read_pattern and ("file" in lowered or "datei" in lowered or "workspace" in lowered or "content" in lowered or "read" in lowered or "lies" in lowered or "lese" in lowered):
+        if read_pattern and ("file" in lowered or "datei" in lowered or "workspace" in lowered or "content" in lowered or "read" in lowered or "lies" in lowered or "lese" in lowered or file_like_hint):
             path = self._extract_path(cleaned)
             if limit is not None:
                 return "read_file", {"path": path, "limit": limit}
             return "read_file", {"path": path}
 
-        if re.search(r"(?:list|ls|dir|show directory|workspace|ordner|verzeichnis)", lowered):
+        if re.search(r"(?:list|ls|dir|show directory|workspace|ordner|verzeichnis)", lowered) and not file_like_hint:
             return "list_dir", {"path": str(self.workspace_dir)}
 
         if re.search(r"(?:http|https|api|fetch|request|url)", lowered):
@@ -264,16 +304,21 @@ class TermuxAgent:
         if action_name == "run_command":
             return self.execute_command(params["command"], timeout=params.get("timeout", 30))
         if action_name == "read_file":
+            path_value = params.get("path") or str(self.workspace_dir)
             try:
-                content = self.tools.read_file(params["path"])
-                self.memory.update_state("last_file_path", params["path"])
+                if Path(path_value).is_dir():
+                    return {"ok": False, "error": f"Path is a directory, not a file: {path_value}"}
+                content = self.tools.read_file(path_value)
+                self.memory.update_state("last_file_path", path_value)
                 self.memory.update_state("last_content", content)
                 limit = params.get("limit")
                 if limit is not None:
                     content = content[: int(limit)]
                 return {"ok": True, "content": content}
             except FileNotFoundError:
-                return {"ok": False, "error": f"File not found: {params['path']}"}
+                return {"ok": False, "error": f"File not found: {path_value}"}
+            except (OSError, IsADirectoryError):
+                return {"ok": False, "error": f"Unable to read file: {path_value}"}
         if action_name == "slice_output":
             text = str(params.get("text", ""))
             limit = params.get("limit")
@@ -467,13 +512,36 @@ class TermuxAgent:
         self.memory.update_state("last_loop", summary)
         return summary
 
-    def status(self) -> dict[str, Any]:
-        return {"workspace": str(self.workspace_dir), "state": self.memory.get_state(), "context": self.memory.get_recent_context()}
-
-    def run_inference(self, prompt: str, system_prompt: str = "You are an autonomous terminal agent helper.", endpoint: str = "http://127.0.0.1:8081/v1/chat/completions") -> str:
-        """Run local inference using the llama-server instance."""
-        from .llm_inference import LocalLLMInference
-        client = LocalLLMInference(endpoint=endpoint)
-        result = client.generate(prompt=prompt, system_prompt=system_prompt)
-        self.memory.log_action("llm_inference_executed", prompt=prompt, response=result)
+    def local_inference(
+        self,
+        prompt: str,
+        *,
+        timeout: int = 30,
+        max_tokens: int = 128,
+        temperature: float = 0.2,
+        fallback: str | None = None,
+    ) -> dict[str, Any]:
+        if not prompt or not prompt.strip():
+            return {"ok": False, "backend": self.llm_backend.config.source, "available": False, "content": "", "error": "empty prompt"}
+        result = self.llm_backend.infer(
+            prompt,
+            timeout=timeout,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            fallback=fallback,
+        )
+        self.memory.log_action("local_inference", prompt=prompt[:200], backend=result.get("backend"), available=result.get("available"), source=result.get("source"))
         return result
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "workspace": str(self.workspace_dir),
+            "state": self.memory.get_state(),
+            "context": self.memory.get_recent_context(),
+            "llm_backend": {
+                "source": self.llm_backend.config.source,
+                "available": self.llm_backend.is_available(),
+                "binary_path": self.llm_backend.config.binary_path,
+                "model_path": self.llm_backend.config.model_path,
+            },
+        }
