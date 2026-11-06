@@ -1,4 +1,4 @@
-"""Lightweight, secure tool helpers for local Termux execution."""
+"""Lightweight, secure local tools for the Termux agent."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import json
 import shlex
 import subprocess
 import sys
-import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -38,7 +37,7 @@ DEFAULT_ALLOWED_COMMANDS = {
 
 
 class ToolExecutor:
-    """Small wrapper around local subprocess and file access operations."""
+    """Minimal but practical tool layer for safe local execution."""
 
     def __init__(self, allowed_commands: Iterable[str] | None = None):
         self.allowed_commands = {str(item).lower() for item in (allowed_commands or DEFAULT_ALLOWED_COMMANDS)}
@@ -70,10 +69,8 @@ class ToolExecutor:
         env: Mapping[str, str] | None = None,
         input_text: str | None = None,
     ) -> dict[str, Any]:
-        """Run a command without invoking a shell to reduce injection risk."""
         normalized = self.normalize_command(command)
         self.check_allowed(normalized)
-
         completed = subprocess.run(
             normalized,
             capture_output=True,
@@ -85,7 +82,6 @@ class ToolExecutor:
             text=True,
             timeout=timeout,
         )
-
         return {
             "command": normalized,
             "returncode": completed.returncode,
@@ -112,7 +108,10 @@ class ToolExecutor:
         return str(file_path)
 
     def read_file(self, path: str | Path, *, encoding: str = "utf-8") -> str:
-        return Path(path).read_text(encoding=encoding)
+        file_path = Path(path)
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+        return file_path.read_text(encoding=encoding)
 
     def path_exists(self, path: str | Path) -> bool:
         return Path(path).exists()
@@ -164,6 +163,26 @@ class ToolExecutor:
                 "content_type": response.headers.get_content_type(),
                 "body": body,
             }
+
+    def safe_join(self, root: str | Path, candidate: str) -> str:
+        root_path = Path(root).resolve()
+        candidate_path = (root_path / candidate).resolve()
+        if root_path not in candidate_path.parents and candidate_path != root_path:
+            raise ValueError(f"Path escapes workspace root: {candidate}")
+        return str(candidate_path)
+
+    def inspect_path(self, path: str | Path) -> dict[str, Any]:
+        file_path = Path(path)
+        if not file_path.exists():
+            return {"exists": False, "path": str(file_path)}
+        stats = file_path.stat()
+        return {
+            "exists": True,
+            "path": str(file_path),
+            "is_dir": file_path.is_dir(),
+            "size": stats.st_size,
+            "modified": datetime.fromtimestamp(stats.st_mtime).isoformat(timespec="seconds"),
+        }
 
 
 def run_command(
@@ -217,5 +236,9 @@ def list_dir(path: str | Path) -> list[str]:
     return ToolExecutor().list_dir(path)
 
 
-def get_file_info(path: str | Path) -> dict[str, Any]:
-    return ToolExecutor().get_file_info(path)
+def inspect_path(path: str | Path) -> dict[str, Any]:
+    return ToolExecutor().inspect_path(path)
+
+
+def safe_join(root: str | Path, candidate: str) -> str:
+    return ToolExecutor().safe_join(root, candidate)
