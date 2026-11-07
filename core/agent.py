@@ -315,6 +315,12 @@ class TermuxAgent:
                 return "read_file", {"path": path, "limit": limit}
             return "read_file", {"path": path}
 
+        if re.search(r"(?:validate|syntax|python|pytest|test)\b", lowered):
+            target_path = self._extract_path(cleaned) or self._get_latest_file_path() or str(self.workspace_dir)
+            if "pytest" in lowered or "test" in lowered and "validate" not in lowered:
+                return "run_pytest", {"path": target_path}
+            return "validate_python_syntax", {"path": target_path}
+
         if re.search(r"(?:list|ls|dir|show directory|workspace|ordner|verzeichnis)", lowered) and not file_like_hint:
             return "list_dir", {"path": str(self.workspace_dir)}
 
@@ -379,6 +385,13 @@ class TermuxAgent:
             match = re.search(r"https?://\S+", goal)
             url = match.group(0) if match else "https://api.github.com"
             return "http_get", {"url": url, "expected_json": "json" in lowered or "api" in lowered}
+        if re.search(r"(syntax|python|pytest|test|validate)", lowered):
+            target_path = self._extract_path(goal) or self._get_latest_file_path() or str(self.workspace_dir)
+            if "pytest" in lowered and "validate" not in lowered:
+                return "run_pytest", {"path": target_path}
+            if "test" in lowered and "pytest" not in lowered and "validate" not in lowered:
+                return "run_pytest", {"path": target_path}
+            return "validate_python_syntax", {"path": target_path}
         if re.search(r"(write|create|save|generate|make)", lowered):
             path = self._extract_path(goal) or str(self.workspace_dir / "agent_note.txt")
             content = self._extract_content(goal) or f"Autonomous agent action for: {goal}\n"
@@ -405,11 +418,6 @@ class TermuxAgent:
             return "list_dir", {"path": str(self.workspace_dir)}
         if re.search(r"(system|status|info|platform|uname)", lowered):
             return "system_info", {}
-        if re.search(r"(syntax|python|pytest|test|validate)", lowered):
-            target_path = self._extract_path(goal) or self._get_latest_file_path() or str(self.workspace_dir)
-            if "pytest" in lowered or "test" in lowered:
-                return "run_pytest", {"path": target_path}
-            return "validate_python_syntax", {"path": target_path}
         if last_result and not (last_result.get("ok") or last_result.get("returncode") == 0):
             if "directory" in str(last_result.get("error") or "").lower() or "read_file" in str(last_result.get("guidance") or "").lower():
                 fallback_path = self._get_latest_file_path()
@@ -424,8 +432,11 @@ class TermuxAgent:
         if action_name == "read_file":
             path_value = params.get("path") or str(self.workspace_dir)
             injected = self._inject_readback_path(self.memory.get_state("current_goal") or "", params)
-            if injected.get("path") and self._is_valid_file_candidate(injected.get("path")):
-                path_value = injected["path"]
+            if injected.get("path"):
+                hinted = str(injected["path"]).strip()
+                if hinted.startswith("/") and not hinted.startswith(str(self.workspace_dir.resolve())):
+                    return {"ok": False, "error": f"Access denied: path escapes workspace root: {hinted}", "guidance": "Use a workspace-local path only. Do not access /etc/passwd or other absolute paths outside the local workspace."}
+                path_value = hinted
             try:
                 if Path(path_value).is_dir():
                     fallback_path = self._get_latest_file_path()
@@ -452,7 +463,7 @@ class TermuxAgent:
                     content = content[: int(limit)]
                 return {"ok": True, "content": content}
             except FileNotFoundError:
-                return {"ok": False, "error": f"File not found: {path_value}"}
+                return {"ok": False, "error": f"File not found: {path_value}", "diagnostic": "The file does not exist in the workspace. Abort or switch to a create/write action rather than repeating the same missing-file read."}
             except (OSError, IsADirectoryError):
                 return {"ok": False, "error": "Provided path is a directory. Use list_dir for directories or append the target filename.", "guidance": "When a task asks to read back a file created previously, use the exact file path from the previous step's observation result. Never use read_file on a directory."}
         if action_name == "slice_output":
@@ -473,7 +484,10 @@ class TermuxAgent:
         if action_name == "system_info":
             return {"ok": True, **self.tools.system_info()}
         if action_name == "http_get":
-            return http_get(params["url"], timeout=params.get("timeout", 15), expected_json=params.get("expected_json", False))
+            url = params["url"]
+            if self._is_local_path_task(url):
+                raise PermissionError(f"Access denied: local workspace paths are not allowed through the network tool: {url}")
+            return http_get(url, timeout=params.get("timeout", 15), expected_json=params.get("expected_json", False))
         if action_name == "validate_python_syntax":
             return self.tools.validate_python_syntax(params.get("path") or self.workspace_dir)
         if action_name == "run_pytest":
@@ -552,6 +566,31 @@ class TermuxAgent:
             return True
         self.memory.update_state("last_missing_file_guard", guard_key)
         return False
+
+    def _build_validation_repair(self, path: str | None, failure: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]] | None:
+        repair_path = str(path or self._get_latest_file_path() or self._extract_path(self.memory.get_state("current_goal") or "") or str(self.workspace_dir))
+        try:
+            repaired_path = self.tools.resolve_workspace_path(self.workspace_dir, repair_path)
+        except ValueError:
+            return None
+        if repaired_path == str(self.workspace_dir):
+            return None
+        content = (failure or {}).get("corrected_content") or (
+            "# Minimal targeted repair generated by TermuxAgent\n"
+            "# Preserve the existing logic and replace only the broken block.\n"
+        )
+        return "write_file", {"path": repaired_path, "content": content}
+
+    def _enforce_no_repeat_validation(self, action_name: str, params: dict[str, Any], *, goal: str, result: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any]] | None:
+        if action_name not in {"validate_python_syntax", "run_pytest"}:
+            return None
+        if not result or (result.get("ok") or result.get("returncode") == 0 or result.get("status") == 200):
+            return None
+        repair = self._build_validation_repair(params.get("path"), result)
+        if not repair:
+            return None
+        next_action_name, next_params = repair
+        return next_action_name, next_params, {"status": "repair_written", "reason": "Validation failed; forced minimal repair instead of repeating the same validation call."}
 
     def _build_repair_action(self, goal: str, result: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
         if not isinstance(result, dict):
@@ -656,12 +695,12 @@ class TermuxAgent:
                         "diagnostic": "Missing file read attempted repeatedly; aborting to prevent identical read loops.",
                     }
             if action_name in {"validate_python_syntax", "run_pytest"} and self._mark_validation_collision(action_name, params):
-                repair = self._build_repair_action(current_goal, {"path": params.get("path"), "corrected_content": "# Repair required: previous validation failed and the same failing parameters were retried.\n"})
+                repair = self._build_validation_repair(params.get("path"), {"corrected_content": "# Minimal repair generated after repeated validation failure.\n"})
                 if repair:
                     action_name, params = repair
                     action = {"name": action_name, "params": params}
                     result = self.perform_action(action_name, params)
-                    next_step = "validate the repaired file with the exact target path"
+                    next_step = f"validate the repaired file at {params.get('path')}"
                     reflection = "Validation repeated with identical failing parameters; forced a minimal repair before any further validation."
                     cycle_record = {
                         "cycle": cycle,
@@ -692,9 +731,40 @@ class TermuxAgent:
                     "cycles": cycle,
                     "history": steps,
                     "context": prior_context,
+                    "diagnostic": "Validation repeated with identical failing parameters; aborting to prevent an infinite validation loop.",
                 }
             action = {"name": action_name, "params": params}
             result = self.perform_action(action_name, params)
+
+            repeat_repair = self._enforce_no_repeat_validation(action_name, params, goal=current_goal, result=result)
+            if repeat_repair is not None:
+                repaired_action_name, repaired_params, status = repeat_repair
+                repair_result = self.perform_action(repaired_action_name, repaired_params)
+                reflection = status["reason"]
+                next_step = f"validate the repaired file at {repaired_params.get('path')}"
+                cycle_record = {
+                    "cycle": cycle,
+                    "goal": current_goal,
+                    "thought": thought,
+                    "action": {"name": repaired_action_name, "params": repaired_params},
+                    "result": repair_result,
+                    "reflection": reflection,
+                    "next_step": next_step,
+                    "completed": False,
+                }
+                steps.append(cycle_record)
+                self.memory.add_cycle(
+                    cycle=cycle,
+                    goal=current_goal,
+                    thought=thought,
+                    action={"name": repaired_action_name, "params": repaired_params},
+                    result=repair_result,
+                    reflection=reflection,
+                    next_step=next_step,
+                )
+                last_result = repair_result
+                current_goal = next_step
+                continue
 
             if not (result.get("ok") or result.get("returncode") == 0 or result.get("status") == 200):
                 error_text = str(result.get("error") or result.get("stderr") or result.get("body") or "").lower()

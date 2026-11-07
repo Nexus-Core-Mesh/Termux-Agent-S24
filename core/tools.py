@@ -175,7 +175,7 @@ class ToolExecutor:
         if not raw:
             return str(root_path)
         if any(marker in raw for marker in ("&&", "||", ";", "|", "\n", "\r")):
-            raise ValueError(f"Invalid path candidate: {candidate!r}")
+            raise ValueError(f"Access denied: invalid path candidate {candidate!r}")
 
         if raw.startswith("~"):
             resolved = Path(raw).expanduser()
@@ -189,8 +189,15 @@ class ToolExecutor:
                 normalized = normalized[2:]
             resolved = (root_path / normalized).resolve()
 
-        if root_path not in resolved.parents and resolved != root_path:
-            raise ValueError(f"Path escapes workspace root: {candidate}")
+        try:
+            resolved = resolved.resolve(strict=False)
+        except OSError as exc:
+            raise ValueError(f"Access denied: invalid path candidate {candidate!r}") from exc
+
+        try:
+            resolved.relative_to(root_path)
+        except ValueError as exc:
+            raise ValueError(f"Access denied: path escapes workspace root: {candidate}") from exc
         return str(resolved)
 
     def safe_join(self, root: str | Path, candidate: str) -> str:
@@ -261,15 +268,18 @@ class ToolExecutor:
             ast.parse(original, filename=str(file_path))
             return {"ok": True, "path": str(file_path), "message": "Python syntax is already valid.", "repair_action": None}
         except SyntaxError as exc:
+            original = locals().get("original", "")
             safe_content = (
                 "# Auto-generated minimal repair by TermuxAgent\n"
                 "# Original content preserved in a docstring to avoid silent data loss.\n"
-                f"'''\n{original if 'original' in locals() else ''}\n'''\n"
+                f"'''\n{original}\n'''\n"
             )
             file_path.write_text(safe_content, encoding="utf-8")
             return {
                 "ok": False,
                 "path": str(file_path),
+                "line": exc.lineno,
+                "column": exc.offset,
                 "error": f"SyntaxError: {exc.msg} (line {exc.lineno}, column {exc.offset})",
                 "hint": "A safe minimal repair was written to the file, and the validator must move on to a different action instead of re-running the same syntax check.",
                 "repair_action": "write_file",
