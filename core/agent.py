@@ -609,10 +609,22 @@ class TermuxAgent:
             "workspace": str(self.workspace_dir),
             "state": self.memory.get_state(),
             "context": self.memory.get_recent_context(),
+            "plans": self.memory.data.get("plans", [])[-5:],
+            "facts": self.memory.data.get("facts", [])[-10:],
+            "history": self.memory.data.get("history", [])[-10:],
             "llm_backend": {
                 "source": self.llm_backend.config.source,
                 "available": self.llm_backend.is_available(),
                 "binary_path": self.llm_backend.config.binary_path,
                 "model_path": self.llm_backend.config.model_path,
             },
+        }
+
+    def memory_snapshot(self, *, limit: int = 10) -> dict[str, Any]:
+        return {
+            "state": self.memory.get_state(),
+            "context": self.memory.get_recent_context(limit=limit),
+            "plans": self.memory.data.get("plans", [])[-limit:],
+            "facts": self.memory.data.get("facts", [])[-limit:],
+            "history": self.memory.data.get("history", [])[-limit:],
         }
