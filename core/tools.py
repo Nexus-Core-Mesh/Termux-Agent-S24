@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import shlex
 import subprocess
@@ -206,6 +207,51 @@ class ToolExecutor:
             "modified": datetime.fromtimestamp(stats.st_mtime).isoformat(timespec="seconds"),
         }
 
+    def validate_python_syntax(self, path: str | Path) -> dict[str, Any]:
+        file_path = Path(path)
+        if not file_path.exists():
+            return {"ok": False, "error": f"File not found: {file_path}", "path": str(file_path)}
+        if file_path.is_dir():
+            return {"ok": False, "error": "Provided path is a directory. Use list_dir for directories or append the target filename.", "path": str(file_path)}
+        try:
+            source = file_path.read_text(encoding="utf-8")
+            ast.parse(source, filename=str(file_path))
+            return {"ok": True, "path": str(file_path), "message": "Python syntax is valid."}
+        except SyntaxError as exc:
+            return {
+                "ok": False,
+                "path": str(file_path),
+                "error": f"SyntaxError: {exc.msg} (line {exc.lineno}, column {exc.offset})",
+                "hint": "Fix the invalid syntax before retrying or rerun with a narrower focused edit.",
+            }
+        except OSError as exc:
+            return {"ok": False, "path": str(file_path), "error": str(exc), "hint": "Check whether the file is readable and still exists."}
+
+    def run_pytest(self, path: str | Path | None = None, *, args: Sequence[str] | None = None) -> dict[str, Any]:
+        target = Path(path) if path is not None else Path.cwd()
+        command = [sys.executable, "-m", "pytest"]
+        if args:
+            command.extend(str(item) for item in args)
+        elif target.exists():
+            if target.is_file():
+                command.append(str(target))
+            elif target.is_dir():
+                command.append(str(target))
+        else:
+            return {"ok": False, "error": f"Target not found: {target}", "hint": "Provide a valid workspace file or directory before running pytest."}
+
+        completed = subprocess.run(command, capture_output=True, text=True, check=False)
+        output = (completed.stdout or "") + (completed.stderr or "")
+        return {
+            "ok": completed.returncode == 0,
+            "returncode": completed.returncode,
+            "command": command,
+            "stdout": completed.stdout,
+            "stderr": completed.stderr,
+            "summary": output.strip()[:400] if output.strip() else "No pytest output.",
+            "hint": "If pytest fails, inspect the first failing test and correct the precise logic or syntax issue before retrying.",
+        }
+
 
 def run_command(
     command: CommandInput,
@@ -238,6 +284,14 @@ def write_file(
 
 def read_file(path: str | Path, *, encoding: str = "utf-8") -> str:
     return ToolExecutor().read_file(path, encoding=encoding)
+
+
+def validate_python_syntax(path: str | Path) -> dict[str, Any]:
+    return ToolExecutor().validate_python_syntax(path)
+
+
+def run_pytest(path: str | Path | None = None, *, args: Sequence[str] | None = None) -> dict[str, Any]:
+    return ToolExecutor().run_pytest(path, args=args)
 
 
 def http_get(

@@ -95,6 +95,10 @@ class TermuxAgent:
         return status
 
     def _get_latest_file_path(self) -> str | None:
+        artifact_path = self.memory.get_latest_file_path()
+        if artifact_path:
+            return artifact_path
+
         for source in (self.memory.get_state("last_file_path"), self.memory.get_state("last_path")):
             if isinstance(source, str) and source.strip():
                 return source.strip()
@@ -135,12 +139,17 @@ class TermuxAgent:
         if not goal_text:
             return str(self.workspace_dir)
 
-        explicit_patterns = [
-            r"(?:named|name|called|in|at|to|from|of|mit|für|in\s+workspace|datei|file)\s+([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*(?:\.[A-Za-z0-9_.\-]+)?)",
+        invalid_tokens = {
+            "workspace", "file", "datei", "path", "location", "folder", "ordner", "verzeichnis",
+            "named", "name", "called", "call", "in", "at", "to", "from", "of", "mit", "für",
+        }
+
+        patterns = [
+            r"(?:named|name|called|in|at|to|from|of|mit|für|datei|file)\s+(?:the\s+)?([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*(?:\.[A-Za-z0-9_.\-]+)?)",
             r"(?:workspace|~?/)?[A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*(?:\.[A-Za-z0-9_.\-]+)?",
         ]
 
-        for pattern in explicit_patterns:
+        for pattern in patterns:
             matches = re.findall(pattern, goal_text, flags=re.IGNORECASE)
             if not matches:
                 continue
@@ -148,12 +157,16 @@ class TermuxAgent:
                 cleaned = str(candidate).strip().strip('"\'')
                 if not cleaned or any(marker in cleaned for marker in ("&&", "||", "|", "\n", "\r")):
                     continue
-                if cleaned.lower() in {"workspace", "file", "datei", "path", "location", "folder", "ordner", "verzeichnis"}:
-                    return str(self.workspace_dir)
-                if re.search(r"\b(?:and\s+then|then|und\s+dann|dann|read|write|create|save|show|list|open|inspect|print|display|file|datei|lies|lese|zeige|schreibe|erstelle|speichere|content|text|message|mit|inhalt)\b", cleaned, flags=re.IGNORECASE):
+                lowered = cleaned.lower()
+                if lowered in invalid_tokens:
+                    continue
+                if re.search(r"\b(?:and\s+then|then|und\s+dann|dann|read|write|create|save|show|list|open|inspect|print|display|file|datei|lies|lese|zeige|schreibe|erstelle|speichere|content|text|message|mit|inhalt)\b", lowered, flags=re.IGNORECASE):
                     continue
                 if not ("/" in cleaned or cleaned.startswith("workspace") or cleaned.startswith("./") or cleaned.endswith((".txt", ".md", ".json", ".log", ".dat", ".csv"))):
-                    continue
+                    if "." in cleaned and not cleaned.startswith("."):
+                        pass
+                    else:
+                        continue
                 try:
                     return self.tools.resolve_workspace_path(self.workspace_dir, cleaned)
                 except ValueError:
@@ -179,32 +192,13 @@ class TermuxAgent:
             content = match.group(1).strip().strip('"\'')
             if content and not any(marker in content for marker in ("&&", "||", "|", "\n", "\r")):
                 return content
+
         content_after = re.search(r"(?:with\s+content|mit\s+content|content|text|message|inhalt)\s+(?:is\s+)?(.+?)(?:\s*(?:and\s+then|then|und\s+dann|dann|;|,\s*(?:read|write|create|save|generate|show|list|open|print|inspect|display|lies|lese|zeige|schreibe|erstelle|speichere)|$))", goal, flags=re.IGNORECASE)
         if content_after:
             candidate = content_after.group(1).strip().strip('"\'')
             if candidate and not any(marker in candidate for marker in ("&&", "||", "|", "\n", "\r")):
                 return candidate
-        if re.search(r"(?:write|create|save|generate|schreibe|erstelle|speichere)\s+(?:a\s+)?(?:file|text|datei)\b", goal, flags=re.IGNORECASE):
-            return f"Autonomous agent action for: {goal}"
-        return None
 
-    def _extract_content(self, goal: str) -> str | None:
-        quoted = re.search(r"[\'\"]([^\'\"]+)[\'\"]", goal)
-        if quoted:
-            content = quoted.group(1).strip()
-            if content and not any(marker in content for marker in ("&&", "||", "|", "\n", "\r")):
-                return content
-
-        match = re.search(r"(?:content|text|message|inhalt)\s*[:=]\s*(.+)", goal, flags=re.IGNORECASE)
-        if match:
-            content = match.group(1).strip().strip('"\'')
-            if content and not any(marker in content for marker in ("&&", "||", "|", "\n", "\r")):
-                return content
-        content_after = re.search(r"(?:with\s+content|mit\s+content|content|text|message|inhalt)\s+(?:is\s+)?(.+?)(?:\s*(?:and\s+then|then|und\s+dann|dann|;|,\s*(?:read|write|create|save|generate|show|list|open|print|inspect|display|lies|lese|zeige|schreibe|erstelle|speichere)|$))", goal, flags=re.IGNORECASE)
-        if content_after:
-            candidate = content_after.group(1).strip().strip('"\'')
-            if candidate and not any(marker in candidate for marker in ("&&", "||", "|", "\n", "\r")):
-                return candidate
         if re.search(r"(?:write|create|save|generate|schreibe|erstelle|speichere)\s+(?:a\s+)?(?:file|text|datei)\b", goal, flags=re.IGNORECASE):
             return f"Autonomous agent action for: {goal}"
         return None
@@ -235,10 +229,22 @@ class TermuxAgent:
         file_like_hint = bool(re.search(r"(?:workspace/|\.[A-Za-z0-9]{1,8}\b|file\s+[A-Za-z0-9_.\-/]+|datei\s+[A-Za-z0-9_.\-/]+|in\s+workspace/[A-Za-z0-9_.\-/]+)", cleaned, flags=re.IGNORECASE))
 
         if write_pattern and ("file" in lowered or "datei" in lowered or "text" in lowered or "content" in lowered or "message" in lowered or file_like_hint):
-            path_match = re.search(r"(?:named|name|called|in|at|to|for|mit|für|datei|file)\s+([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*(?:\.[A-Za-z0-9_.\-]+)?)", cleaned, flags=re.IGNORECASE)
+            path_match = re.search(
+                r"(?:file|datei)\s+(?:named|name|called|at|in|to|for|mit|für)?\s*(?:the\s+)?([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*(?:\.[A-Za-z0-9_.\-]+)?)",
+                cleaned,
+                flags=re.IGNORECASE,
+            )
+            if not path_match:
+                path_match = re.search(
+                    r"(?:named|name|called|in|at|to|for|mit|für)\s+(?:the\s+)?([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*(?:\.[A-Za-z0-9_.\-]+)?)",
+                    cleaned,
+                    flags=re.IGNORECASE,
+                )
             if not path_match:
                 path_match = re.search(r"workspace/[A-Za-z0-9_.\-/]+(?:\.[A-Za-z0-9_.\-]+)?", cleaned, flags=re.IGNORECASE)
             path_name = path_match.group(1) if path_match and path_match.groups() else (path_match.group(0) if path_match else "agent_task.txt")
+            if path_name.lower() in {"file", "datei", "named", "name", "called", "in", "at", "to", "for", "mit", "für"}:
+                path_name = "agent_task.txt"
             target = self.tools.safe_join(self.workspace_dir, path_name.replace("workspace/", "")) if path_name.startswith("workspace/") else self.tools.safe_join(self.workspace_dir, path_name)
             content_match = re.search(r"(?:with\s+content|mit\s+content|content|text|message|inhalt)\s*[:=]?\s*(.+?)(?:\s*(?:and\s+then|then|und\s+dann|dann|;|,\s*(?:read|write|create|save|generate|show|list|open|print|inspect|display|lies|lese|zeige|schreibe|erstelle|speichere))|$)", cleaned, flags=re.IGNORECASE)
             content = (
@@ -285,6 +291,8 @@ class TermuxAgent:
                 error_message = last_result.get("error") or last_result.get("stderr") or last_result.get("body") or ""
                 if isinstance(error_message, str) and "directory" in error_message.lower():
                     summary.append("FILE vs DIRECTORY RULE: use read_file only for files; use list_dir for directories. Never pass a directory path to read_file.")
+                if isinstance(error_message, str) and any(token in error_message.lower() for token in ("syntaxerror", "traceback", "assert", "failed", "permission", "not found")):
+                    summary.append("SELF-CORRECTION RULE: diagnose the exact failing operation, fix the likely root cause, and retry within the same cycle using a narrower, safer action.")
         payload = last_result.get("stdout") or last_result.get("body") or last_result.get("stderr") or ""
         snippet = str(payload)[:180].replace("\n", " ")
         if snippet:
@@ -322,11 +330,14 @@ class TermuxAgent:
             content = self._extract_content(goal) or f"Autonomous agent action for: {goal}\n"
             return "write_file", {"path": path, "content": content}
         if re.search(r"(read|open|show|cat|inspect|view|file)", lowered):
-            path = self._extract_path(goal)
+            inherited_path = self._get_latest_file_path()
+            path = self._extract_path(goal) or inherited_path
             if path is None:
                 path = last_result.get("path") if isinstance(last_result, dict) else None
             if path is None:
                 path = self.memory.get_state("last_file_path") or str(self.workspace_dir / "notes.txt")
+            if ("read it back" in lowered or "read back" in lowered or "read it" in lowered or "lies it back" in lowered or "lies es zurück" in lowered) and inherited_path:
+                path = inherited_path
             if path == str(self.workspace_dir) and re.search(r"(?:show|print|display)\s+(?:only\s+)?(?:the\s+)?(?:first|last)", lowered):
                 previous_content = self.memory.get_state("last_content")
                 if previous_content is not None:
@@ -339,6 +350,11 @@ class TermuxAgent:
             return "list_dir", {"path": str(self.workspace_dir)}
         if re.search(r"(system|status|info|platform|uname)", lowered):
             return "system_info", {}
+        if re.search(r"(syntax|python|pytest|test|validate)", lowered):
+            target_path = self._extract_path(goal) or self._get_latest_file_path() or str(self.workspace_dir)
+            if "pytest" in lowered or "test" in lowered:
+                return "run_pytest", {"path": target_path}
+            return "validate_python_syntax", {"path": target_path}
         if last_result and not (last_result.get("ok") or last_result.get("returncode") == 0):
             if "directory" in str(last_result.get("error") or "").lower() or "read_file" in str(last_result.get("guidance") or "").lower():
                 fallback_path = self._get_latest_file_path()
@@ -391,6 +407,7 @@ class TermuxAgent:
         if action_name == "write_file":
             path = self.tools.write_file(params["path"], params["content"])
             self.memory.update_state("last_file_path", path)
+            self.memory.update_state("last_path", path)
             self.memory.update_state("last_content", params["content"])
             return {"ok": True, "path": path, "bytes_written": len(params["content"])}
         if action_name == "list_dir":
@@ -399,6 +416,10 @@ class TermuxAgent:
             return {"ok": True, **self.tools.system_info()}
         if action_name == "http_get":
             return http_get(params["url"], timeout=params.get("timeout", 15), expected_json=params.get("expected_json", False))
+        if action_name == "validate_python_syntax":
+            return self.tools.validate_python_syntax(params.get("path") or self.workspace_dir)
+        if action_name == "run_pytest":
+            return self.tools.run_pytest(params.get("path"), args=params.get("args"))
         return {"ok": False, "error": f"Unknown action: {action_name}"}
 
     def reflect_on_result(self, goal: str, result: dict[str, Any]) -> tuple[str, str | None, bool]:
@@ -410,16 +431,31 @@ class TermuxAgent:
                 return "The write completed successfully; this task can be considered complete unless more follow-up work is needed.", None, True
             return "The action succeeded; continue with the next logical step if the task is not yet finished.", None, True
 
+        error_text = str(result.get("error") or result.get("stderr") or result.get("body") or "").lower()
         if "read" in goal.lower() or "open" in goal.lower() or "file" in goal.lower():
-            if isinstance(result, dict) and "directory" in str(result.get("error") or "").lower():
+            if "directory" in error_text:
                 return "FILE vs DIRECTORY RULE: use read_file only for files; use list_dir for directories. Never pass a directory path to read_file. When a task asks to read back a file created previously, use the exact file path from the previous step's observation result.", "list workspace contents and then read the exact target file path from the previous step's result", False
+            if any(token in error_text for token in ("syntaxerror", "traceback", "assert", "failed", "not found", "permission")):
+                return "The file or tool operation failed; diagnose the exact issue, apply a surgical fix, and retry within the same cycle before escalating.", "narrow the failing operation to the precise file and retry with minimal context", False
             return "The file operation failed; verify whether the path exists and adjust the plan.", "inspect workspace files", False
+
+        if any(token in error_text for token in ("syntaxerror", "traceback", "assert", "failed", "not found", "permission")):
+            return "The previous action failed; adjust the strategy based on the exact traceback, then retry with a smaller and more targeted change.", "diagnose the failing step and apply the minimal corrective action", False
         return "The previous step did not complete successfully; self-correct by trying a safer or more specific step.", "re-evaluate with a more precise action", False
 
     def _self_correct(self, goal: str, last_result: dict[str, Any] | None) -> str:
         if not last_result:
             return goal
+
+        error_text = str(last_result.get("error") or last_result.get("stderr") or last_result.get("body") or "").lower()
         if not (last_result.get("ok") or last_result.get("returncode") == 0 or last_result.get("status") == 200):
+            if "directory" in error_text:
+                fallback_path = self._get_latest_file_path()
+                if fallback_path:
+                    return f"read the exact file at {fallback_path}"
+                return "list workspace contents and then read the exact target file"
+            if "syntaxerror" in error_text or "traceback" in error_text or "assert" in error_text:
+                return "fix the precise failing syntax or logic error and retry the same operation"
             if "file" in goal.lower() or "write" in goal.lower() or "create" in goal.lower():
                 return "inspect workspace files"
             if "http" in goal.lower() or "api" in goal.lower():
@@ -487,6 +523,19 @@ class TermuxAgent:
             action_name, params = self.identify_action(current_goal, last_result)
             action = {"name": action_name, "params": params}
             result = self.perform_action(action_name, params)
+
+            if not (result.get("ok") or result.get("returncode") == 0 or result.get("status") == 200):
+                error_text = str(result.get("error") or result.get("stderr") or result.get("body") or "").lower()
+                if "directory" in error_text:
+                    fallback_path = self._get_latest_file_path()
+                    if fallback_path:
+                        params["path"] = fallback_path
+                        result = self.perform_action(action_name, params)
+                elif any(token in error_text for token in ("syntaxerror", "traceback", "assert", "not found", "permission", "failed")):
+                    corrected_goal = self._self_correct(current_goal, result)
+                    if corrected_goal and corrected_goal != current_goal:
+                        current_goal = corrected_goal
+
             reflection, next_step, ok = self.reflect_on_result(current_goal, result)
 
             cycle_record = {
