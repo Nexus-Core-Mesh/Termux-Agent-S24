@@ -7,6 +7,7 @@ import importlib.util
 import json
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import urllib.request
@@ -148,6 +149,52 @@ class ToolExecutor:
             "python_version": sys.version.split()[0],
             "cwd": str(Path.cwd()),
         }
+
+    def start_background_process(
+        self,
+        command: CommandInput,
+        *,
+        cwd: str | Path | None = None,
+        env: Mapping[str, str] | None = None,
+        stdout: str | None = None,
+        stderr: str | None = None,
+    ) -> dict[str, Any]:
+        normalized = self.normalize_command(command)
+        self.check_allowed(normalized)
+        output = stdout if stdout is not None else subprocess.DEVNULL
+        error_output = stderr if stderr is not None else subprocess.DEVNULL
+        process = subprocess.Popen(
+            normalized,
+            cwd=str(cwd) if cwd is not None else None,
+            env=dict(env) if env is not None else None,
+            stdout=output,
+            stderr=error_output,
+            start_new_session=True,
+        )
+        return {
+            "ok": True,
+            "pid": process.pid,
+            "command": normalized,
+            "cwd": str(cwd) if cwd is not None else str(Path.cwd()),
+            "started": datetime.now().isoformat(timespec="seconds"),
+        }
+
+    def check_port_open(self, port: int, *, host: str = "127.0.0.1", timeout: float = 0.5) -> dict[str, Any]:
+        try:
+            port_int = int(port)
+        except (TypeError, ValueError):
+            return {"ok": False, "port": port, "host": host, "error": "Invalid port number"}
+        if port_int < 1 or port_int > 65535:
+            return {"ok": False, "port": port, "host": host, "error": "Port must be between 1 and 65535"}
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        try:
+            sock.connect((host, port_int))
+            return {"ok": True, "port": port_int, "host": host, "open": True}
+        except OSError:
+            return {"ok": True, "port": port_int, "host": host, "open": False}
+        finally:
+            sock.close()
 
     def http_get(
         self,
