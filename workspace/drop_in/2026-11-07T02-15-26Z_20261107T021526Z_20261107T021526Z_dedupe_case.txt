@@ -1,0 +1,11 @@
+---
+timestamp=2026-11-07T02:15:26Z
+source=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/inbox/20261107T021526Z_dedupe_case.txt
+queued_copy=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/inbox/20261107T021526Z_20261107T021526Z_dedupe_case.txt
+project=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace
+archive=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/drop_in/2026-11-07T02-15-26Z_20261107T021526Z_20261107T021526Z_dedupe_case.txt
+sha256=929d452a1e3fb7ce2d3efb8c753199afcbf6ed70be3185d77cee5301a4ba575e
+
+Project: Termux-Agent-S24
+Same data, second run should skip.
+

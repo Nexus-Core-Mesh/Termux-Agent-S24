@@ -78,12 +78,39 @@ class WatchdogDaemon:
         return cleaned[:80] or "watchdog_ingest"
 
     @staticmethod
+    @staticmethod
     def _sha256(path: Path) -> str:
         digest = hashlib.sha256()
         with path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(65536), b""):
                 digest.update(chunk)
         return digest.hexdigest()
+
+    def _hash_seen(self, path: Path) -> dict[str, Any] | None:
+        digest = self._sha256(path)
+        previous = self.memory.get_file_hash(str(path))
+        if previous == digest:
+            self.memory.log_action(
+                "watchdog_hash_skipped",
+                path=str(path),
+                sha256=digest,
+                reason="unchanged file detected; skipping redundant ingestion and OCR processing",
+            )
+            return {"ok": True, "skipped": True, "sha256": digest, "path": str(path), "reason": "unchanged file"}
+
+        hash_match = self.memory.get_hash_match(digest)
+        if hash_match:
+            self.memory.log_action(
+                "watchdog_hash_skipped",
+                path=str(path),
+                sha256=digest,
+                reason="hash collision with previously ingested file; skipping duplicate processing",
+                matched_path=hash_match.get("path"),
+            )
+            return {"ok": True, "skipped": True, "sha256": digest, "path": str(path), "reason": "hash seen before", "matched_path": hash_match.get("path")}
+
+        self.memory.record_file_hash(str(path), digest, source="watchdog")
+        return {"ok": True, "skipped": False, "sha256": digest, "path": str(path)}
 
     @staticmethod
     def _read_text_file(path: Path) -> str:
@@ -279,6 +306,16 @@ class WatchdogDaemon:
         if not source_path.exists() or not source_path.is_file():
             return {"ok": False, "error": "missing file", "path": str(source_path)}
 
+        hash_state = self._hash_seen(source_path)
+        if hash_state and hash_state.get("skipped"):
+            return {
+                "ok": True,
+                "skipped": True,
+                "path": str(source_path),
+                "sha256": hash_state.get("sha256"),
+                "reason": "unchanged file detected; ingestion skipped to save CPU and battery.",
+            }
+
         queued = self._queue_file(source_path)
         extracted = self.extract_text(queued)
         project_dir = self.classify_project(extracted, fallback=self.workspace_dir)
@@ -308,6 +345,7 @@ class WatchdogDaemon:
             "archive_path": str(archive_path),
             "log_path": str(project_log),
             "text_length": len(extracted),
+            "sha256": self._sha256(queued),
             "timestamp": self._now_iso(),
         }
         self.memory.log_action("watchdog_ingest_routed", **payload)

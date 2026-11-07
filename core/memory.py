@@ -175,6 +175,53 @@ class MemoryManager:
                 return value.strip()
         return None
 
+    def record_file_hash(self, path: str, sha256: str, *, source: str | None = None) -> dict[str, Any]:
+        state = self.data.setdefault("state", {})
+        seen = state.setdefault("seen_file_hashes", {})
+        if not isinstance(seen, dict):
+            seen = {}
+        hash_index = state.setdefault("file_hash_index", {})
+        if not isinstance(hash_index, dict):
+            hash_index = {}
+        state["seen_file_hashes"] = seen
+        state["file_hash_index"] = hash_index
+        entry = {
+            "path": str(path),
+            "sha256": str(sha256),
+            "source": source,
+            "timestamp": self._now_iso(),
+        }
+        seen[str(path)] = entry
+        hash_index[str(sha256)] = {
+            "sha256": str(sha256),
+            "path": str(path),
+            "source": source,
+            "timestamp": entry["timestamp"],
+        }
+        self.save()
+        return entry
+
+    def get_file_hash(self, path: str) -> str | None:
+        seen = self.data.setdefault("state", {}).get("seen_file_hashes", {})
+        if not isinstance(seen, dict):
+            return None
+        entry = seen.get(str(path))
+        if isinstance(entry, dict):
+            digest = entry.get("sha256")
+            if isinstance(digest, str) and digest.strip():
+                return digest.strip()
+        return None
+
+    def get_hash_match(self, sha256: str) -> dict[str, Any] | None:
+        state = self.data.setdefault("state", {})
+        hash_index = state.get("file_hash_index", {})
+        if not isinstance(hash_index, dict):
+            return None
+        entry = hash_index.get(str(sha256))
+        if isinstance(entry, dict):
+            return entry
+        return None
+
     def reset(self) -> dict[str, Any]:
         fresh = self._default_state()
         self.data = fresh
