@@ -10,6 +10,7 @@ All notable updates for the Termux-Agent-S24 project.
 - Added a direct `--task` execution flow that triggers real autonomous behavior instead of idle output.
 - Added local background-process hooks and a port-open probe to support simple local runtime orchestration without cloud dependencies.
 - Added an optional local inference bridge in `core/llm.py` for local llama.cpp / llama-server access to Qwen models like `qwen2.5-coder-0.5b-instruct.gguf`.
+- Added a local watchdog daemon in `core/watchdog_daemon.py` that polls Android storage/download roots and the workspace inbox, then routes incoming files into project-specific archives with memory synchronization.
 - Kept the project documentation aligned with the current local Termux agent behavior.
 
 ### Changed

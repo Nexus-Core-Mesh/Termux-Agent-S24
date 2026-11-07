@@ -14,6 +14,7 @@ Key capabilities include:
 - deterministic repair flows that convert failed syntax validation into surgical write_file actions instead of blind retries
 - strict workspace-only path enforcement and cleared access-denied responses for forbidden system paths
 - an optional local LLM bridge for llama.cpp and Qwen on the device, with transparent fallback behavior when local inference is unavailable
+- a local watchdog daemon that polls default download/storage areas and the project inbox for dropped files and automatically ingests them into the appropriate workspace project
 
 ## Project structure
 
@@ -21,6 +22,8 @@ Key capabilities include:
 - `core/memory.py` — persistent workspace memory and action history storage
 - `core/agent.py` — task parsing, multi-step execution loop, guardrails, self-healing, and deterministic validation flow
 - `core/llm.py` — optional local llama.cpp / llama-server + Qwen detection and bridge support with clean fallback behavior
+- `core/watcher.py` — inbox-oriented drop-in daemon for local text/PDF/image ingestion
+- `core/watchdog_daemon.py` — background watcher for storage/download roots plus the workspace inbox, routing drops into the correct project directory
 - `main.py` — interactive and direct task CLI entrypoint
 - `workspace/` — local runtime state, memory and generated artifacts
 
