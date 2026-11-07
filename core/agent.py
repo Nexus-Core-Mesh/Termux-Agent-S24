@@ -100,19 +100,23 @@ class TermuxAgent:
         value = candidate.strip()
         if not value or any(marker in value for marker in ("&&", "||", "|", "\n", "\r")):
             return False
+        if value in {".", "..", str(self.workspace_dir), str(self.workspace_dir.resolve())}:
+            return False
+        if value.endswith("/"):
+            return False
 
         expanded = Path(value).expanduser()
-        resolved = str(expanded.resolve()) if expanded.exists() or value.startswith((str(self.workspace_dir), "/")) else str(expanded)
         workspace_root = str(self.workspace_dir.resolve())
 
-        if value.startswith(str(self.workspace_dir)):
+        if expanded.exists() and expanded.is_dir():
+            return False
+
+        if value.startswith(str(self.workspace_dir)) or value.startswith(workspace_root):
             return True
-        if value.startswith(workspace_root):
+        if value.startswith("workspace/") or value.startswith("./"):
             return True
         if value.startswith("/") and not value.startswith(workspace_root):
             return False
-        if value.startswith("workspace/") or value.startswith("./"):
-            return True
 
         suffix = Path(value).suffix.lower()
         if suffix and suffix in {".txt", ".md", ".json", ".log", ".dat", ".csv", ".py", ".sh", ".yaml", ".yml"}:
@@ -136,14 +140,17 @@ class TermuxAgent:
         return None
 
     def _get_latest_file_path(self) -> str | None:
+        ordered_sources = []
         artifact_path = self.memory.get_latest_file_path()
-        if self._is_valid_file_candidate(artifact_path):
-            return str(artifact_path).strip()
-
-        for source in (self.memory.get_state("last_file_path"), self.memory.get_state("last_path")):
+        if artifact_path is not None:
+            ordered_sources.append(artifact_path)
+        for source in (self.memory.get_state("last_file_path"), self.memory.get_state("last_path"), self.memory.get_state("last_result_path")):
+            if source is not None:
+                ordered_sources.append(source)
+        ordered_sources.extend(self._find_history_file_path() for _ in range(0))
+        for source in ordered_sources:
             if self._is_valid_file_candidate(source):
                 return str(source).strip()
-
         return self._find_history_file_path()
 
     def _guarded_read_target(self, goal: str, explicit_path: str | None = None) -> str:
@@ -163,12 +170,12 @@ class TermuxAgent:
         if not isinstance(params, dict):
             return params
 
-        path_value = params.get("path")
         lowered = (goal or "").lower()
         read_intent = any(token in lowered for token in ("read it back", "read back", "read it", "read file", "open file", "show file", "inspect file", "lies es zurück", "lese es zurück", "read the file"))
         if not read_intent:
             return params
 
+        path_value = params.get("path")
         if self._is_valid_file_candidate(path_value):
             return params
 
