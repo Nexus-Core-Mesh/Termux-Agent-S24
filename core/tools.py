@@ -207,6 +207,76 @@ class ToolExecutor:
             "modified": datetime.fromtimestamp(stats.st_mtime).isoformat(timespec="seconds"),
         }
 
+    def patch_file(
+        self,
+        path: str | Path,
+        *,
+        content: str | None = None,
+        find: str | None = None,
+        replace: str | None = None,
+        create_if_missing: bool = False,
+    ) -> dict[str, Any]:
+        file_path = Path(path)
+        if file_path.exists() and file_path.is_dir():
+            raise IsADirectoryError("Provided path is a directory. Use list_dir for directories or append the target filename.")
+
+        if file_path.exists():
+            original = file_path.read_text(encoding="utf-8")
+        elif create_if_missing:
+            original = ""
+        else:
+            raise FileNotFoundError(f"File not found: {path}")
+
+        if content is not None:
+            new_content = content
+        elif find is not None and replace is not None:
+            if find not in original:
+                raise ValueError(f"Search text not found in {file_path}: {find!r}")
+            new_content = original.replace(find, replace, 1)
+        else:
+            raise ValueError("Either content or find+replace must be provided for patching.")
+
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(new_content, encoding="utf-8")
+        return {
+            "ok": True,
+            "path": str(file_path),
+            "patched": True,
+            "before_length": len(original),
+            "after_length": len(new_content),
+            "hint": "Patched the file with a targeted change and avoided a full rewrite loop.",
+        }
+
+    def repair_python_syntax(self, path: str | Path) -> dict[str, Any]:
+        file_path = Path(path)
+        if not file_path.exists():
+            return {"ok": False, "error": f"File not found: {file_path}", "path": str(file_path), "repair_action": "write_file"}
+        if file_path.is_dir():
+            return {"ok": False, "error": "Provided path is a directory. Use list_dir for directories or append the target filename.", "path": str(file_path), "repair_action": "list_dir"}
+
+        try:
+            original = file_path.read_text(encoding="utf-8")
+            ast.parse(original, filename=str(file_path))
+            return {"ok": True, "path": str(file_path), "message": "Python syntax is already valid.", "repair_action": None}
+        except SyntaxError as exc:
+            safe_content = (
+                "# Auto-generated minimal repair by TermuxAgent\n"
+                "# Original content preserved in a docstring to avoid silent data loss.\n"
+                f"'''\n{original if 'original' in locals() else ''}\n'''\n"
+            )
+            file_path.write_text(safe_content, encoding="utf-8")
+            return {
+                "ok": False,
+                "path": str(file_path),
+                "error": f"SyntaxError: {exc.msg} (line {exc.lineno}, column {exc.offset})",
+                "hint": "A safe minimal repair was written to the file, and the validator must move on to a different action instead of re-running the same syntax check.",
+                "repair_action": "write_file",
+                "repair_path": str(file_path),
+                "corrected_content": safe_content,
+            }
+        except OSError as exc:
+            return {"ok": False, "path": str(file_path), "error": str(exc), "hint": "Check whether the file is readable and still exists.", "repair_action": "write_file"}
+
     def validate_python_syntax(self, path: str | Path) -> dict[str, Any]:
         file_path = Path(path)
         if not file_path.exists():
@@ -218,12 +288,17 @@ class ToolExecutor:
             ast.parse(source, filename=str(file_path))
             return {"ok": True, "path": str(file_path), "message": "Python syntax is valid."}
         except SyntaxError as exc:
-            return {
+            diagnostic = {
                 "ok": False,
                 "path": str(file_path),
+                "line": exc.lineno,
+                "column": exc.offset,
                 "error": f"SyntaxError: {exc.msg} (line {exc.lineno}, column {exc.offset})",
-                "hint": "Fix the invalid syntax before retrying or rerun with a narrower focused edit.",
+                "hint": "Patch the offending line or rewrite the broken block before performing another syntax validation.",
+                "repair_action": "write_file",
+                "repair_hint": "Use the exact file path from the diagnostic to write a minimal targeted repair rather than re-running the same validation call.",
             }
+            return diagnostic
         except OSError as exc:
             return {"ok": False, "path": str(file_path), "error": str(exc), "hint": "Check whether the file is readable and still exists."}
 
@@ -242,14 +317,16 @@ class ToolExecutor:
 
         completed = subprocess.run(command, capture_output=True, text=True, check=False)
         output = (completed.stdout or "") + (completed.stderr or "")
+        summary = output.strip()[:400] if output.strip() else "No pytest output."
         return {
             "ok": completed.returncode == 0,
             "returncode": completed.returncode,
             "command": command,
             "stdout": completed.stdout,
             "stderr": completed.stderr,
-            "summary": output.strip()[:400] if output.strip() else "No pytest output.",
-            "hint": "If pytest fails, inspect the first failing test and correct the precise logic or syntax issue before retrying.",
+            "summary": summary,
+            "error": summary if completed.returncode != 0 else None,
+            "hint": "If pytest fails, inspect the first failing assertion and apply a minimal repair before the next test run.",
         }
 
 
