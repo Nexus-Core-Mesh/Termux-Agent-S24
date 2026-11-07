@@ -28,6 +28,7 @@ class TermuxAgent:
         self.tools = ToolExecutor(allowed_commands=allowed_commands)
         self.llm_backend = llm_backend or LocalLLMBackend()
         self.memory.log_action("agent_initialized", workspace=str(self.workspace_dir), llm_backend=str(self.llm_backend.config.source))
+        self.memory.update_state("workspace_dir", str(self.workspace_dir))
 
     def execute_command(
         self,
@@ -199,10 +200,27 @@ class TermuxAgent:
         file_like_hint = bool(re.search(r"(?:workspace/|\.[A-Za-z0-9]{1,8}\b|file\s+[A-Za-z0-9_.\-/]+|datei\s+[A-Za-z0-9_.\-/]+|in\s+workspace/[A-Za-z0-9_.\-/]+)", cleaned, flags=re.IGNORECASE))
 
         if write_pattern and ("file" in lowered or "datei" in lowered or "text" in lowered or "content" in lowered or "message" in lowered or file_like_hint):
-            path_match = re.search(r"(?:named|name|called|in|at|to|for|mit|für|datei|file)\s+([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*(?:\.[A-Za-z0-9_.\-]+)?)", cleaned, flags=re.IGNORECASE)
-            if not path_match:
-                path_match = re.search(r"workspace/[A-Za-z0-9_.\-/]+(?:\.[A-Za-z0-9_.\-]+)?", cleaned, flags=re.IGNORECASE)
-            path_name = path_match.group(1) if path_match and path_match.groups() else (path_match.group(0) if path_match else "agent_task.txt")
+            explicit_patterns = [
+                r"(?:named|name|called|file|datei)\s+(?:the\s+)?([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*(?:\.[A-Za-z0-9_.\-]+)?)",
+                r"(?:in|at|to|for|mit|für)\s+(?:workspace/)?([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*(?:\.[A-Za-z0-9_.\-]+)?)",
+                r"workspace/[A-Za-z0-9_.\-/]+(?:\.[A-Za-z0-9_.\-]+)?",
+            ]
+            path_name = "agent_task.txt"
+            for pattern in explicit_patterns:
+                path_match = re.search(pattern, cleaned, flags=re.IGNORECASE)
+                if not path_match:
+                    continue
+                candidate = path_match.group(1) if path_match.lastindex else path_match.group(0)
+                candidate = str(candidate).strip().strip('"\'')
+                if not candidate:
+                    continue
+                if candidate.lower() in {"workspace", "file", "datei", "path", "location", "folder", "ordner", "verzeichnis"}:
+                    continue
+                if candidate.startswith("workspace/"):
+                    path_name = candidate
+                else:
+                    path_name = candidate if "/" in candidate or candidate.endswith((".txt", ".md", ".json", ".log", ".dat", ".csv")) else candidate
+                break
             target = self.tools.safe_join(self.workspace_dir, path_name.replace("workspace/", "")) if path_name.startswith("workspace/") else self.tools.safe_join(self.workspace_dir, path_name)
             content_match = re.search(r"(?:with\s+content|mit\s+content|content|text|message|inhalt)\s*[:=]?\s*(.+?)(?:\s*(?:and\s+then|then|und\s+dann|dann|;|,\s*(?:read|write|create|save|generate|show|list|open|print|inspect|display|lies|lese|zeige|schreibe|erstelle|speichere))|$)", cleaned, flags=re.IGNORECASE)
             content = (
@@ -363,6 +381,36 @@ class TermuxAgent:
             return "review the previous output and retry with a smaller, safer action"
         return goal
 
+    def _normalize_result(self, action_name: str, params: dict[str, Any], result: dict[str, Any], *, task: str) -> dict[str, Any]:
+        status = "ok" if bool(result.get("ok") or result.get("returncode") == 0 or result.get("status") == 200) else "error"
+        return {
+            "task": task,
+            "action": {"name": action_name, "params": params},
+            "status": status,
+            "result": result,
+            "warnings": [],
+            "next_action": None,
+        }
+
+    def plan_task(self, task: str) -> dict[str, Any]:
+        task_text = (task or "").strip()
+        if not task_text:
+            return {"goal": "", "status": "empty", "steps": []}
+
+        subtasks = self.split_subtasks(task_text)
+        if not subtasks:
+            subtasks = [task_text]
+
+        steps = []
+        for index, subtask in enumerate(subtasks, 1):
+            action_name, params = self._resolve_task_to_action(subtask)
+            steps.append({"index": index, "task": subtask, "action": action_name, "params": params})
+
+        plan = {"goal": task_text, "status": "planned", "steps": steps}
+        self.memory.add_plan(task_text, [step["task"] for step in steps])
+        self.memory.update_state("current_plan", plan)
+        return plan
+
     def run_once(self, task: str = "", command: str | list[str] | None = None) -> dict[str, Any]:
         if command is not None:
             payload: dict[str, Any] = {"status": "ok", "task": task}
@@ -375,6 +423,9 @@ class TermuxAgent:
         task_text = (task or "").strip()
         if not task_text:
             return {"status": "empty_task", "task": task_text, "history": []}
+
+        plan = self.plan_task(task_text)
+        self.memory.add_fact("task_plan", plan["steps"], source="planner", tags=["plan", "task"])
 
         subtasks = self.split_subtasks(task_text)
         if len(subtasks) > 1:
@@ -396,12 +447,7 @@ class TermuxAgent:
 
         action_name, params = self._resolve_task_to_action(task_text)
         result = self.perform_action(action_name, params)
-        payload = {
-            "status": "executed",
-            "task": task_text,
-            "action": {"name": action_name, "params": params},
-            "result": result,
-        }
+        payload = self._normalize_result(action_name, params, result, task=task_text)
         self.memory.log_action("run_once", status=payload["status"], task=payload["task"], tool_action=payload["action"], result=payload["result"])
         self.memory.update_state("last_run", payload)
         return payload
@@ -424,6 +470,12 @@ class TermuxAgent:
             action = {"name": action_name, "params": params}
             result = self.perform_action(action_name, params)
             reflection, next_step, ok = self.reflect_on_result(current_goal, result)
+
+            if not ok and action_name in {"read_file", "write_file", "list_dir", "http_get"}:
+                fallback = self._self_correct(current_goal, result)
+                if fallback and fallback != current_goal:
+                    next_step = fallback
+                    reflection = f"Fallback triggered after failed action: {fallback}."
 
             cycle_record = {
                 "cycle": cycle,
@@ -470,6 +522,7 @@ class TermuxAgent:
             "context": prior_context,
         }
         self.memory.update_state("last_autonomous_run", summary)
+        self.memory.add_fact("last_autonomous_goal", goal, source="autonomy", tags=["goal", "history"])
         return summary
 
     def run_autonomous(self, goal: str, max_cycles: int = 5) -> dict[str, Any]:

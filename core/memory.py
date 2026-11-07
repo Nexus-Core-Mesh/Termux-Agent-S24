@@ -22,11 +22,14 @@ class MemoryManager:
     def _default_state(self) -> dict[str, Any]:
         now = self._now_iso()
         return {
-            "schema_version": "1.0",
+            "schema_version": "1.1",
             "created_at": now,
             "updated_at": now,
             "status": "initialized",
             "goals": [],
+            "plans": [],
+            "facts": [],
+            "context": {},
             "state": {},
             "history": [],
             "actions": [],
@@ -48,8 +51,12 @@ class MemoryManager:
             raw_data = {}
 
         normalized = self._default_state()
-        for key in ("state", "goals", "history", "actions"):
-            if isinstance(raw_data.get(key), type(normalized[key])):
+        for key in ("state", "goals", "history", "actions", "plans", "facts", "context"):
+            if key == "state" and isinstance(raw_data.get(key), dict):
+                normalized[key] = raw_data[key]
+            elif key in {"goals", "history", "actions", "plans", "facts"} and isinstance(raw_data.get(key), list):
+                normalized[key] = raw_data[key]
+            elif key == "context" and isinstance(raw_data.get(key), dict):
                 normalized[key] = raw_data[key]
         normalized["status"] = str(raw_data.get("status", "initialized"))
         normalized["updated_at"] = str(raw_data.get("updated_at", normalized["updated_at"]))
@@ -118,8 +125,33 @@ class MemoryManager:
         self.save()
         return entry
 
+    def add_fact(self, key: str, value: Any, *, source: str | None = None, tags: list[str] | None = None) -> dict[str, Any]:
+        fact = {
+            "key": key,
+            "value": value,
+            "source": source or "agent",
+            "tags": tags or [],
+            "created_at": self._now_iso(),
+        }
+        self.data.setdefault("facts", []).append(fact)
+        self.data.setdefault("context", {})[key] = value
+        self.save()
+        return fact
+
+    def add_plan(self, goal: str, steps: list[str], *, status: str = "active") -> dict[str, Any]:
+        plan = {
+            "goal": goal,
+            "status": status,
+            "steps": steps,
+            "created_at": self._now_iso(),
+        }
+        self.data.setdefault("plans", []).append(plan)
+        self.save()
+        return plan
+
     def update_state(self, key: str, value: Any) -> Any:
         self.data.setdefault("state", {})[key] = value
+        self.data.setdefault("context", {})[key] = value
         self.save()
         return value
 
