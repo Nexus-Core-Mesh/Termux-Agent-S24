@@ -1696,6 +1696,15 @@
       },
       "id": 160,
       "timestamp": "2026-11-07T02:41:01.725193+00:00"
+    },
+    {
+      "action": "agent_initialized",
+      "details": {
+        "llm_backend": "fallback",
+        "workspace": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace"
+      },
+      "id": 161,
+      "timestamp": "2026-11-07T02:41:32.044289+00:00"
     }
   ],
   "context": {
@@ -1731,9 +1740,11 @@
       "history": [
         {
           "action": {
-            "name": "list_dir",
+            "name": "search_text",
             "params": {
-              "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace"
+              "max_results": 10,
+              "pattern": "hello in workspace",
+              "root": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace"
             }
           },
           "completed": true,
@@ -1742,24 +1753,60 @@
           "next_step": null,
           "reflection": "The action succeeded; continue with the next logical step if the task is not yet finished.",
           "result": {
-            "entries": [
-              "chain1.txt",
-              "chain2.txt",
-              "chain3.txt",
-              "demo.txt",
-              "demo2.txt",
-              "demo3.txt",
-              "demo4.txt",
-              "memory.json",
-              "notes.txt",
-              "quoted_test.txt",
-              "quoted_test2.txt",
-              "runloop.txt",
-              "test.txt",
-              "test1.txt",
-              "test2.txt"
+            "matches": [
+              {
+                "line": 1711,
+                "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+                "text": "\"current_goal\": \"search for hello in workspace\","
+              },
+              {
+                "line": 1735,
+                "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+                "text": "\"last_autonomous_goal\": \"search for hello in workspace\","
+              },
+              {
+                "line": 1739,
+                "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+                "text": "\"goal\": \"search for hello in workspace\","
+              },
+              {
+                "line": 1750,
+                "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+                "text": "\"goal\": \"search for hello in workspace\","
+              },
+              {
+                "line": 1773,
+                "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+                "text": "\"thought\": \"Goal: search for hello in workspace | No previous observation; start with a targeted probe.\""
+              },
+              {
+                "line": 1826,
+                "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+                "text": "\"value\": \"search for hello in workspace\""
+              },
+              {
+                "line": 2589,
+                "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+                "text": "\"goal\": \"search for hello in workspace\","
+              },
+              {
+                "line": 2595,
+                "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+                "text": "\"goal\": \"search for hello in workspace\","
+              },
+              {
+                "line": 5817,
+                "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+                "text": "\"goal\": \"search for hello in workspace\","
+              },
+              {
+                "line": 5840,
+                "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+                "text": "\"thought\": \"Goal: search for hello in workspace | No previous observation; start with a targeted probe.\","
+              }
             ],
-            "ok": true
+            "ok": true,
+            "truncated": true
           },
           "thought": "Goal: search for hello in workspace | No previous observation; start with a targeted probe."
         }
@@ -1774,7 +1821,7 @@
     "next_step": null,
     "workspace_dir": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace"
   },
-  "created_at": "2026-11-07T02:41:01.724747+00:00",
+  "created_at": "2026-11-07T02:41:32.043924+00:00",
   "facts": [
     {
       "created_at": "2026-11-07T02:36:12.745941+00:00",
@@ -1808,6 +1855,16 @@
     },
     {
       "created_at": "2026-11-07T02:41:01.955640+00:00",
+      "key": "last_autonomous_goal",
+      "source": "autonomy",
+      "tags": [
+        "goal",
+        "history"
+      ],
+      "value": "search for hello in workspace"
+    },
+    {
+      "created_at": "2026-11-07T02:41:32.088632+00:00",
       "key": "last_autonomous_goal",
       "source": "autonomy",
       "tags": [
@@ -2576,6 +2633,12 @@
     },
     {
       "created_at": "2026-11-07T02:41:01.737000+00:00",
+      "details": {},
+      "goal": "search for hello in workspace",
+      "status": "active"
+    },
+    {
+      "created_at": "2026-11-07T02:41:32.056139+00:00",
       "details": {},
       "goal": "search for hello in workspace",
       "status": "active"
@@ -5824,6 +5887,78 @@
       },
       "thought": "Goal: search for hello in workspace | No previous observation; start with a targeted probe.",
       "timestamp": "2026-11-07T02:41:01.823337+00:00"
+    },
+    {
+      "action": {
+        "name": "search_text",
+        "params": {
+          "max_results": 10,
+          "pattern": "hello in workspace",
+          "root": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace"
+        }
+      },
+      "cycle": 1,
+      "goal": "search for hello in workspace",
+      "next_step": null,
+      "reflection": "The action succeeded; continue with the next logical step if the task is not yet finished.",
+      "result": {
+        "matches": [
+          {
+            "line": 1711,
+            "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+            "text": "\"current_goal\": \"search for hello in workspace\","
+          },
+          {
+            "line": 1735,
+            "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+            "text": "\"last_autonomous_goal\": \"search for hello in workspace\","
+          },
+          {
+            "line": 1739,
+            "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+            "text": "\"goal\": \"search for hello in workspace\","
+          },
+          {
+            "line": 1750,
+            "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+            "text": "\"goal\": \"search for hello in workspace\","
+          },
+          {
+            "line": 1773,
+            "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+            "text": "\"thought\": \"Goal: search for hello in workspace | No previous observation; start with a targeted probe.\""
+          },
+          {
+            "line": 1826,
+            "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+            "text": "\"value\": \"search for hello in workspace\""
+          },
+          {
+            "line": 2589,
+            "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+            "text": "\"goal\": \"search for hello in workspace\","
+          },
+          {
+            "line": 2595,
+            "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+            "text": "\"goal\": \"search for hello in workspace\","
+          },
+          {
+            "line": 5817,
+            "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+            "text": "\"goal\": \"search for hello in workspace\","
+          },
+          {
+            "line": 5840,
+            "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+            "text": "\"thought\": \"Goal: search for hello in workspace | No previous observation; start with a targeted probe.\","
+          }
+        ],
+        "ok": true,
+        "truncated": true
+      },
+      "thought": "Goal: search for hello in workspace | No previous observation; start with a targeted probe.",
+      "timestamp": "2026-11-07T02:41:32.066531+00:00"
     }
   ],
   "plans": [
@@ -5879,9 +6014,11 @@
       "history": [
         {
           "action": {
-            "name": "list_dir",
+            "name": "search_text",
             "params": {
-              "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace"
+              "max_results": 10,
+              "pattern": "hello in workspace",
+              "root": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace"
             }
           },
           "completed": true,
@@ -5890,24 +6027,60 @@
           "next_step": null,
           "reflection": "The action succeeded; continue with the next logical step if the task is not yet finished.",
           "result": {
-            "entries": [
-              "chain1.txt",
-              "chain2.txt",
-              "chain3.txt",
-              "demo.txt",
-              "demo2.txt",
-              "demo3.txt",
-              "demo4.txt",
-              "memory.json",
-              "notes.txt",
-              "quoted_test.txt",
-              "quoted_test2.txt",
-              "runloop.txt",
-              "test.txt",
-              "test1.txt",
-              "test2.txt"
+            "matches": [
+              {
+                "line": 1711,
+                "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+                "text": "\"current_goal\": \"search for hello in workspace\","
+              },
+              {
+                "line": 1735,
+                "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+                "text": "\"last_autonomous_goal\": \"search for hello in workspace\","
+              },
+              {
+                "line": 1739,
+                "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+                "text": "\"goal\": \"search for hello in workspace\","
+              },
+              {
+                "line": 1750,
+                "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+                "text": "\"goal\": \"search for hello in workspace\","
+              },
+              {
+                "line": 1773,
+                "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+                "text": "\"thought\": \"Goal: search for hello in workspace | No previous observation; start with a targeted probe.\""
+              },
+              {
+                "line": 1826,
+                "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+                "text": "\"value\": \"search for hello in workspace\""
+              },
+              {
+                "line": 2589,
+                "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+                "text": "\"goal\": \"search for hello in workspace\","
+              },
+              {
+                "line": 2595,
+                "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+                "text": "\"goal\": \"search for hello in workspace\","
+              },
+              {
+                "line": 5817,
+                "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+                "text": "\"goal\": \"search for hello in workspace\","
+              },
+              {
+                "line": 5840,
+                "path": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/memory.json",
+                "text": "\"thought\": \"Goal: search for hello in workspace | No previous observation; start with a targeted probe.\","
+              }
             ],
-            "ok": true
+            "ok": true,
+            "truncated": true
           },
           "thought": "Goal: search for hello in workspace | No previous observation; start with a targeted probe."
         }
@@ -6094,5 +6267,5 @@
     "workspace_dir": "/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace"
   },
   "status": "initialized",
-  "updated_at": "2026-11-07T02:41:01.955649+00:00"
+  "updated_at": "2026-11-07T02:41:32.088641+00:00"
 }

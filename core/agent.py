@@ -296,6 +296,10 @@ class TermuxAgent:
             path = self._extract_path(goal) or str(self.workspace_dir / "agent_note.txt")
             content = self._extract_content(goal) or f"Autonomous agent action for: {goal}\n"
             return "write_file", {"path": path, "content": content}
+        if re.search(r"(?:search|find|grep|scan|look for|suche|grep)", lowered):
+            pattern = re.search(r"(?:for|nach)\s+([A-Za-z0-9_./\- ]+)", goal, flags=re.IGNORECASE)
+            query = pattern.group(1).strip() if pattern else goal.strip()
+            return "search_text", {"root": str(self.workspace_dir), "pattern": query, "max_results": 10}
         if re.search(r"(read|open|show|cat|inspect|view|file)", lowered):
             path = self._extract_path(goal)
             if path is None:
@@ -314,10 +318,6 @@ class TermuxAgent:
             return "list_dir", {"path": str(self.workspace_dir)}
         if re.search(r"(system|status|info|platform|uname)", lowered):
             return "system_info", {}
-        if re.search(r"(?:search|find|grep|scan|look for|suche|grep)", lowered):
-            pattern = re.search(r"(?:for|nach)\s+([A-Za-z0-9_./\- ]+)", goal, flags=re.IGNORECASE)
-            query = pattern.group(1).strip() if pattern else goal.strip()
-            return "search_text", {"root": str(self.workspace_dir), "pattern": query, "max_results": 10}
         if re.search(r"(?:compare|diff|versus|vergleich|unterschied)", lowered):
             left_match = re.search(r"(?:compare|diff|vergleich|unterschied)\s+(?:file\s+)?([A-Za-z0-9_.\-/]+)", goal, flags=re.IGNORECASE)
             right_match = re.search(r"(?:and|vs|gegen|mit)\s+(?:file\s+)?([A-Za-z0-9_.\-/]+)", goal, flags=re.IGNORECASE)
