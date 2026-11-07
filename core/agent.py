@@ -177,8 +177,6 @@ class TermuxAgent:
             params["path"] = inherited
             return params
 
-        if "read it back" in lowered or "read back" in lowered or "read it" in lowered or "lies es zurück" in lowered or "lese es zurück" in lowered:
-            params["path"] = str(self.workspace_dir)
         return params
 
     def _extract_path(self, goal: str) -> str | None:
@@ -572,6 +570,8 @@ class TermuxAgent:
             if prior_context:
                 thought = f"{prior_context} | {thought}"
             action_name, params = self.identify_action(current_goal, last_result)
+            if action_name == "read_file":
+                params = self._inject_readback_path(current_goal, params)
             action = {"name": action_name, "params": params}
             result = self.perform_action(action_name, params)
 

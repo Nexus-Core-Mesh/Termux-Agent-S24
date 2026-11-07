@@ -113,8 +113,8 @@ class MemoryManager:
             "timestamp": self._now_iso(),
         }
         history = self.data.setdefault("history", [])
-        if len(history) > 100:
-            history[:] = history[-100:]
+        if len(history) > 12:
+            history[:] = history[-12:]
         history.append(entry)
         self.update_state("last_cycle", cycle)
         self.update_state("last_reflection", reflection)
