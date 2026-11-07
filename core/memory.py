@@ -198,6 +198,16 @@ class MemoryManager:
             "source": source,
             "timestamp": entry["timestamp"],
         }
+        history = state.setdefault("file_hash_history", [])
+        if not isinstance(history, list):
+            history = []
+        state["file_hash_history"] = history
+        history.append({
+            "path": str(path),
+            "sha256": str(sha256),
+            "source": source,
+            "timestamp": entry["timestamp"],
+        })
         self.save()
         return entry
 

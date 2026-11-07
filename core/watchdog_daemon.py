@@ -109,6 +109,27 @@ class WatchdogDaemon:
             )
             return {"ok": True, "skipped": True, "sha256": digest, "path": str(path), "reason": "hash seen before", "matched_path": hash_match.get("path")}
 
+        project_logs = []
+        for project in self._candidate_projects():
+            log_path = project / "drop_in_log.txt"
+            if log_path.exists():
+                try:
+                    text = log_path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                if f"sha256={digest}" in text:
+                    project_logs.append(str(log_path))
+                    break
+        if project_logs:
+            self.memory.log_action(
+                "watchdog_hash_skipped",
+                path=str(path),
+                sha256=digest,
+                reason="matching hash found in project drop-in log; skipping redundant archive and OCR work",
+                matched_log=project_logs[0],
+            )
+            return {"ok": True, "skipped": True, "sha256": digest, "path": str(path), "reason": "hash seen in project log", "matched_log": project_logs[0]}
+
         self.memory.record_file_hash(str(path), digest, source="watchdog")
         return {"ok": True, "skipped": False, "sha256": digest, "path": str(path)}
 
