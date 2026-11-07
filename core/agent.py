@@ -94,36 +94,61 @@ class TermuxAgent:
             return f"{status}; content={str(content)[:80]}"
         return status
 
-    def _get_latest_file_path(self) -> str | None:
-        artifact_path = self.memory.get_latest_file_path()
-        if artifact_path:
-            return artifact_path
+    def _is_valid_file_candidate(self, candidate: Any) -> bool:
+        if not isinstance(candidate, str):
+            return False
+        value = candidate.strip()
+        if not value or any(marker in value for marker in ("&&", "||", "|", "\n", "\r")):
+            return False
 
-        for source in (self.memory.get_state("last_file_path"), self.memory.get_state("last_path")):
-            if isinstance(source, str) and source.strip():
-                return source.strip()
+        expanded = Path(value).expanduser()
+        resolved = str(expanded.resolve()) if expanded.exists() or value.startswith((str(self.workspace_dir), "/")) else str(expanded)
+        workspace_root = str(self.workspace_dir.resolve())
 
+        if value.startswith(str(self.workspace_dir)):
+            return True
+        if value.startswith(workspace_root):
+            return True
+        if value.startswith("/") and not value.startswith(workspace_root):
+            return False
+        if value.startswith("workspace/") or value.startswith("./"):
+            return True
+
+        suffix = Path(value).suffix.lower()
+        if suffix and suffix in {".txt", ".md", ".json", ".log", ".dat", ".csv", ".py", ".sh", ".yaml", ".yml"}:
+            return True
+        return False
+
+    def _find_history_file_path(self) -> str | None:
         history = self.memory.data.get("history", [])
         for item in reversed(history):
-            action = item.get("action") if isinstance(item, dict) else {}
-            if not isinstance(action, dict):
+            if not isinstance(item, dict):
                 continue
+            action = item.get("action") if isinstance(item, dict) else {}
             result = item.get("result", {}) if isinstance(item, dict) else {}
-            if isinstance(result, dict):
-                path = result.get("path") or result.get("file")
-                if isinstance(path, str) and path.strip():
-                    return path.strip()
-                if isinstance(action, dict):
-                    params = action.get("params", {})
-                    if isinstance(params, dict):
-                        candidate = params.get("path")
-                        if isinstance(candidate, str) and candidate.strip():
-                            return candidate.strip()
+            for candidate in (
+                (result.get("path") if isinstance(result, dict) else None),
+                (result.get("file") if isinstance(result, dict) else None),
+                ((action.get("params", {}) if isinstance(action, dict) else {}).get("path") if isinstance(action, dict) else None),
+            ):
+                if self._is_valid_file_candidate(candidate):
+                    return str(candidate).strip()
         return None
 
+    def _get_latest_file_path(self) -> str | None:
+        artifact_path = self.memory.get_latest_file_path()
+        if self._is_valid_file_candidate(artifact_path):
+            return str(artifact_path).strip()
+
+        for source in (self.memory.get_state("last_file_path"), self.memory.get_state("last_path")):
+            if self._is_valid_file_candidate(source):
+                return str(source).strip()
+
+        return self._find_history_file_path()
+
     def _guarded_read_target(self, goal: str, explicit_path: str | None = None) -> str:
-        if explicit_path:
-            return explicit_path
+        if explicit_path and self._is_valid_file_candidate(explicit_path):
+            return str(explicit_path)
 
         inherited = self._get_latest_file_path()
         if inherited:
@@ -133,6 +158,28 @@ class TermuxAgent:
             return str(self.workspace_dir)
 
         return str(self.workspace_dir)
+
+    def _inject_readback_path(self, goal: str, params: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(params, dict):
+            return params
+
+        path_value = params.get("path")
+        lowered = (goal or "").lower()
+        read_intent = any(token in lowered for token in ("read it back", "read back", "read it", "read file", "open file", "show file", "inspect file", "lies es zurück", "lese es zurück", "read the file"))
+        if not read_intent:
+            return params
+
+        if self._is_valid_file_candidate(path_value):
+            return params
+
+        inherited = self._get_latest_file_path()
+        if inherited:
+            params["path"] = inherited
+            return params
+
+        if "read it back" in lowered or "read back" in lowered or "read it" in lowered or "lies es zurück" in lowered or "lese es zurück" in lowered:
+            params["path"] = str(self.workspace_dir)
+        return params
 
     def _extract_path(self, goal: str) -> str | None:
         goal_text = (goal or "").strip()
@@ -345,6 +392,7 @@ class TermuxAgent:
             payload = {"path": path}
             if limit is not None:
                 payload["limit"] = limit
+            payload = self._inject_readback_path(goal, payload)
             return "read_file", payload
         if re.search(r"(list|ls|dir|workspace|directory)", lowered):
             return "list_dir", {"path": str(self.workspace_dir)}
@@ -368,6 +416,9 @@ class TermuxAgent:
             return self.execute_command(params["command"], timeout=params.get("timeout", 30))
         if action_name == "read_file":
             path_value = params.get("path") or str(self.workspace_dir)
+            injected = self._inject_readback_path(self.memory.get_state("current_goal") or "", params)
+            if injected.get("path") and self._is_valid_file_candidate(injected.get("path")):
+                path_value = injected["path"]
             try:
                 if Path(path_value).is_dir():
                     fallback_path = self._get_latest_file_path()
