@@ -4,6 +4,7 @@ from .agent import TermuxAgent
 from .llm import LocalLLMBackend, LocalModelConfig, detect_local_llm_backend
 from .memory import MemoryManager
 from .tools import ToolExecutor, read_file, run_command, write_file
+from .watcher import DropInDaemon
 
 __all__ = [
     "TermuxAgent",
@@ -15,4 +16,5 @@ __all__ = [
     "run_command",
     "read_file",
     "write_file",
+    "DropInDaemon",
 ]
