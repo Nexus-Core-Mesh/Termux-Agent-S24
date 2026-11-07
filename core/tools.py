@@ -37,6 +37,11 @@ DEFAULT_ALLOWED_COMMANDS = {
     "rm",
     "python",
     "python3",
+    "pip",
+    "pip3",
+    "pkg",
+    "apt",
+    "apt-get",
 }
 
 
@@ -178,6 +183,53 @@ class ToolExecutor:
             "cwd": str(cwd) if cwd is not None else str(Path.cwd()),
             "started": datetime.now().isoformat(timespec="seconds"),
         }
+
+    def ensure_local_dependency(
+        self,
+        *,
+        binary: str | None = None,
+        python_module: str | None = None,
+        package: str | None = None,
+        install_cmd: list[str] | None = None,
+    ) -> dict[str, Any]:
+        if binary is not None and shutil.which(binary):
+            return {"ok": True, "dependency": binary, "status": "available"}
+        if python_module is not None:
+            try:
+                importlib.util.find_spec(python_module)
+                return {"ok": True, "dependency": python_module, "status": "available"}
+            except (ImportError, AttributeError, ValueError):
+                pass
+
+        install_spec = install_cmd or []
+        if not install_spec:
+            if package:
+                install_spec = [sys.executable, "-m", "pip", "install", package]
+            elif binary:
+                if shutil.which("pkg"):
+                    install_spec = ["pkg", "install", "-y", binary]
+                else:
+                    install_spec = [sys.executable, "-m", "pip", "install", binary]
+            elif python_module:
+                install_spec = [sys.executable, "-m", "pip", "install", python_module]
+
+        if not install_spec:
+            return {"ok": False, "error": "No installation command available for this dependency", "dependency": binary or python_module or package}
+
+        try:
+            completed = subprocess.run(install_spec, capture_output=True, text=True, check=False)
+            installed = bool(completed.returncode == 0)
+            return {
+                "ok": installed,
+                "dependency": binary or python_module or package,
+                "command": install_spec,
+                "returncode": completed.returncode,
+                "stdout": completed.stdout,
+                "stderr": completed.stderr,
+                "hint": "The daemon auto-installed a missing local OCR/parsing dependency and will retry validation after the installation step.",
+            }
+        except OSError as exc:
+            return {"ok": False, "dependency": binary or python_module or package, "error": str(exc), "command": install_spec}
 
     def check_port_open(self, port: int, *, host: str = "127.0.0.1", timeout: float = 0.5) -> dict[str, Any]:
         try:

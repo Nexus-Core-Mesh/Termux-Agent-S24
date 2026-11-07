@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .memory import MemoryManager
+from .tools import ToolExecutor
 
 
 class WatchdogDaemon:
@@ -29,6 +30,7 @@ class WatchdogDaemon:
         self.workspace_dir = Path(workspace_dir).resolve()
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.memory = MemoryManager(memory_path or self.workspace_dir / "memory.json")
+        self.tools = ToolExecutor()
         self.poll_interval = float(poll_interval)
         self.inbox_dir = (self.workspace_dir / "inbox").resolve()
         self.inbox_dir.mkdir(parents=True, exist_ok=True)
@@ -87,7 +89,26 @@ class WatchdogDaemon:
     def _read_text_file(path: Path) -> str:
         return path.read_text(encoding="utf-8", errors="replace")
 
+    def _ensure_parser_dependencies(self) -> dict[str, Any]:
+        package_plan = [
+            {"binary": "tesseract", "package": "tesseract"},
+            {"binary": "pdftotext", "package": "poppler"},
+            {"python_module": "pypdf", "package": "pypdf"},
+            {"python_module": "PIL", "package": "pillow"},
+            {"python_module": "docx", "package": "python-docx"},
+        ]
+        results: list[dict[str, Any]] = []
+        for requirement in package_plan:
+            result = self.tools.ensure_local_dependency(**requirement)
+            results.append(result)
+            if result.get("ok"):
+                continue
+            self.memory.log_action("watchdog_dependency_install_attempt", **result)
+        return {"ok": all(item.get("ok") or item.get("status") == "available" for item in results), "results": results}
+
     def _extract_pdf_text(self, path: Path) -> str:
+        dependency_probe = self._ensure_parser_dependencies()
+        self.memory.log_action("watchdog_dependency_probe", **dependency_probe)
         for binary in ("pdftotext", "mutool"):
             executable = shutil.which(binary)
             if executable:
@@ -116,6 +137,8 @@ class WatchdogDaemon:
             return "[PDF extraction unavailable locally: install pdftotext, mutool, or pypdf on this device.]"
 
     def _extract_image_text(self, path: Path) -> str:
+        dependency_probe = self._ensure_parser_dependencies()
+        self.memory.log_action("watchdog_dependency_probe", **dependency_probe)
         tesseract = shutil.which("tesseract")
         if tesseract:
             try:
