@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 import json
 import shlex
+import shutil
 import subprocess
 import sys
 import urllib.request
@@ -303,6 +305,15 @@ class ToolExecutor:
             return {"ok": False, "path": str(file_path), "error": str(exc), "hint": "Check whether the file is readable and still exists."}
 
     def run_pytest(self, path: str | Path | None = None, *, args: Sequence[str] | None = None) -> dict[str, Any]:
+        if shutil.which("pytest") is None and importlib.util.find_spec("pytest") is None:
+            return {
+                "ok": False,
+                "error": "pytest is not installed or not available in PATH.",
+                "hint": "Install pytest in the local environment or validate the target file with python -m py_compile instead.",
+                "path": str(path) if path is not None else str(Path.cwd()),
+                "repair_action": "validate_python_syntax",
+            }
+
         target = Path(path) if path is not None else Path.cwd()
         command = [sys.executable, "-m", "pytest"]
         if args:

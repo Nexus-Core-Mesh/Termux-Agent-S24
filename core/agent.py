@@ -319,6 +319,8 @@ class TermuxAgent:
             return "list_dir", {"path": str(self.workspace_dir)}
 
         if re.search(r"(?:http|https|api|fetch|request|url)", lowered):
+            if self._is_local_path_task(cleaned):
+                return "read_file", {"path": self._extract_path(cleaned) or self._get_latest_file_path() or str(self.workspace_dir)}
             match = re.search(r"https?://\S+", cleaned)
             url = match.group(0) if match else "https://api.github.com"
             return "http_get", {"url": url, "expected_json": "json" in lowered or "api" in lowered}
@@ -541,6 +543,16 @@ class TermuxAgent:
         self.memory.update_state("last_validation_guard", guard_key)
         return False
 
+    def _mark_missing_file_collision(self, action_name: str, params: dict[str, Any]) -> bool:
+        if action_name != "read_file":
+            return False
+        guard_key = json.dumps({"action": action_name, "path": params.get("path")}, sort_keys=True)
+        previous = self.memory.get_state("last_missing_file_guard")
+        if previous == guard_key:
+            return True
+        self.memory.update_state("last_missing_file_guard", guard_key)
+        return False
+
     def _build_repair_action(self, goal: str, result: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
         if not isinstance(result, dict):
             return None
@@ -556,6 +568,23 @@ class TermuxAgent:
                 "# Fix the syntax or test failure and keep the change as narrow as possible.\n"
             )
         return "write_file", {"path": repair_path, "content": content}
+
+    def _is_local_path_task(self, goal: str) -> bool:
+        lowered = (goal or "").lower()
+        local_markers = (
+            "workspace/",
+            "/workspace",
+            "test",
+            "txt",
+            "json",
+            "py",
+            "sh",
+            "md",
+            "workspace",
+        )
+        has_local_path = any(marker in lowered for marker in local_markers)
+        has_network_signal = any(token in lowered for token in ("http://", "https://", "api", "github.com", "fetch", "request", "url"))
+        return has_local_path and not has_network_signal
 
     def run_once(self, task: str = "", command: str | list[str] | None = None) -> dict[str, Any]:
         if command is not None:
@@ -617,6 +646,15 @@ class TermuxAgent:
             action_name, params = self.identify_action(current_goal, last_result)
             if action_name == "read_file":
                 params = self._inject_readback_path(current_goal, params)
+                if self._mark_missing_file_collision(action_name, params):
+                    return {
+                        "status": "aborted_missing_file",
+                        "goal": current_goal,
+                        "cycles": cycle,
+                        "history": steps,
+                        "context": prior_context,
+                        "diagnostic": "Missing file read attempted repeatedly; aborting to prevent identical read loops.",
+                    }
             if action_name in {"validate_python_syntax", "run_pytest"} and self._mark_validation_collision(action_name, params):
                 repair = self._build_repair_action(current_goal, {"path": params.get("path"), "corrected_content": "# Repair required: previous validation failed and the same failing parameters were retried.\n"})
                 if repair:
@@ -676,6 +714,15 @@ class TermuxAgent:
                             action = {"name": action_name, "params": params}
                             result = self.perform_action(action_name, params)
                             current_goal = f"validate the repaired file at {params.get('path')}"
+                    if action_name == "read_file" and "not found" in error_text:
+                        return {
+                            "status": "aborted_missing_file",
+                            "goal": current_goal,
+                            "cycles": cycle,
+                            "history": steps,
+                            "context": prior_context,
+                            "diagnostic": "The file does not exist; aborting read-back instead of repeating the same missing-file read.",
+                        }
 
             reflection, next_step, ok = self.reflect_on_result(current_goal, result)
 
