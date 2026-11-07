@@ -314,6 +314,20 @@ class TermuxAgent:
             return "list_dir", {"path": str(self.workspace_dir)}
         if re.search(r"(system|status|info|platform|uname)", lowered):
             return "system_info", {}
+        if re.search(r"(?:search|find|grep|scan|look for|suche|grep)", lowered):
+            pattern = re.search(r"(?:for|nach)\s+([A-Za-z0-9_./\- ]+)", goal, flags=re.IGNORECASE)
+            query = pattern.group(1).strip() if pattern else goal.strip()
+            return "search_text", {"root": str(self.workspace_dir), "pattern": query, "max_results": 10}
+        if re.search(r"(?:compare|diff|versus|vergleich|unterschied)", lowered):
+            left_match = re.search(r"(?:compare|diff|vergleich|unterschied)\s+(?:file\s+)?([A-Za-z0-9_.\-/]+)", goal, flags=re.IGNORECASE)
+            right_match = re.search(r"(?:and|vs|gegen|mit)\s+(?:file\s+)?([A-Za-z0-9_.\-/]+)", goal, flags=re.IGNORECASE)
+            if left_match:
+                left = self.tools.resolve_workspace_path(self.workspace_dir, left_match.group(1))
+                right = self.tools.resolve_workspace_path(self.workspace_dir, right_match.group(1)) if right_match else left
+                return "compare_files", {"left": left, "right": right}
+        if re.search(r"(?:analy|analyse|inspect|review|summarize|summary|prüfe|bewerte|zusammenfass)", lowered):
+            path = self._extract_path(goal) or str(self.workspace_dir)
+            return "read_file", {"path": path}
         if last_result and not (last_result.get("ok") or last_result.get("returncode") == 0):
             return "list_dir", {"path": str(self.workspace_dir)}
         return "run_command", {"command": ["echo", f"agent task: {goal}"]}
@@ -353,6 +367,10 @@ class TermuxAgent:
             return {"ok": True, "entries": self.tools.list_dir(params["path"])}
         if action_name == "system_info":
             return {"ok": True, **self.tools.system_info()}
+        if action_name == "search_text":
+            return self.tools.search_text(params["root"], params["pattern"], max_results=params.get("max_results", 20))
+        if action_name == "compare_files":
+            return self.tools.compare_files(params["left"], params["right"])
         if action_name == "http_get":
             return http_get(params["url"], timeout=params.get("timeout", 15), expected_json=params.get("expected_json", False))
         return {"ok": False, "error": f"Unknown action: {action_name}"}

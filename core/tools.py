@@ -26,6 +26,9 @@ DEFAULT_ALLOWED_COMMANDS = {
     "tail",
     "stat",
     "find",
+    "grep",
+    "sed",
+    "diff",
     "mkdir",
     "touch",
     "cp",
@@ -33,6 +36,8 @@ DEFAULT_ALLOWED_COMMANDS = {
     "rm",
     "python",
     "python3",
+    "zip",
+    "unzip",
 }
 
 
@@ -202,6 +207,48 @@ class ToolExecutor:
             "is_dir": file_path.is_dir(),
             "size": stats.st_size,
             "modified": datetime.fromtimestamp(stats.st_mtime).isoformat(timespec="seconds"),
+        }
+
+    def search_text(self, root: str | Path, pattern: str, *, max_results: int = 20, file_glob: str | None = None) -> dict[str, Any]:
+        root_path = Path(root).resolve()
+        if not root_path.exists():
+            return {"ok": False, "error": f"Path not found: {root_path}", "matches": []}
+
+        matches: list[dict[str, Any]] = []
+        search_glob = file_glob or "*"
+        pattern_text = str(pattern).strip()
+        if not pattern_text:
+            return {"ok": False, "error": "empty search pattern", "matches": []}
+
+        for candidate in root_path.rglob(search_glob):
+            if not candidate.is_file():
+                continue
+            try:
+                content = candidate.read_text(encoding="utf-8", errors="replace")
+            except (OSError, UnicodeDecodeError):
+                continue
+            for line_number, line in enumerate(content.splitlines(), start=1):
+                if pattern_text.lower() in line.lower():
+                    matches.append({"path": str(candidate), "line": line_number, "text": line.strip()})
+                    if len(matches) >= max_results:
+                        return {"ok": True, "matches": matches, "truncated": True}
+        return {"ok": True, "matches": matches, "truncated": False}
+
+    def compare_files(self, left: str | Path, right: str | Path) -> dict[str, Any]:
+        left_path = Path(left)
+        right_path = Path(right)
+        if not left_path.exists() or not right_path.exists():
+            return {"ok": False, "error": "One or both files do not exist"}
+
+        left_text = left_path.read_text(encoding="utf-8", errors="replace")
+        right_text = right_path.read_text(encoding="utf-8", errors="replace")
+        return {
+            "ok": True,
+            "left_path": str(left_path),
+            "right_path": str(right_path),
+            "same": left_text == right_text,
+            "left_size": len(left_text),
+            "right_size": len(right_text),
         }
 
 
