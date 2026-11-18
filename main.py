@@ -13,16 +13,40 @@ def _run_once(agent: TermuxAgent, task: str, cycles: int) -> dict:
     task_text = (task or "").strip()
     if not task_text:
         return {"status": "empty_task", "task": task_text, "history": []}
-    return agent.run_autonomous(task_text, max_cycles=max(cycles, 1))
+    plan = agent.plan_task(task_text)
+    result = agent.run_autonomous(task_text, max_cycles=max(cycles, 1))
+    result["plan"] = plan
+    return result
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the local Termux agent.")
     parser.add_argument("--task", default="", help="High-level task for the agent")
     parser.add_argument("--cycles", type=int, default=5, help="Number of autonomous cycles to run")
+    parser.add_argument("--status", action="store_true", help="Print the agent status instead of running a task")
+    parser.add_argument("--memory", action="store_true", help="Print the memory snapshot instead of running a task")
+    parser.add_argument("--history", action="store_true", help="Print recent history instead of running a task")
+    parser.add_argument("--plans", action="store_true", help="Print recent plans instead of running a task")
+    parser.add_argument("--reset-memory", action="store_true", help="Reset the workspace memory before running")
     args = parser.parse_args()
 
     agent = TermuxAgent(workspace_dir="workspace")
+
+    if args.reset_memory:
+        agent.memory.reset()
+
+    if args.status:
+        print(json.dumps(agent.status(), indent=2, ensure_ascii=False))
+        return
+    if args.memory:
+        print(json.dumps(agent.memory_snapshot(), indent=2, ensure_ascii=False))
+        return
+    if args.history:
+        print(json.dumps({"history": agent.memory.data.get("history", [])[-10:]}, indent=2, ensure_ascii=False))
+        return
+    if args.plans:
+        print(json.dumps({"plans": agent.memory.data.get("plans", [])[-10:]}, indent=2, ensure_ascii=False))
+        return
 
     if args.task:
         result = _run_once(agent, args.task, args.cycles)

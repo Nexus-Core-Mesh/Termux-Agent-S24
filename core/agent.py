@@ -28,6 +28,7 @@ class TermuxAgent:
         self.tools = ToolExecutor(allowed_commands=allowed_commands)
         self.llm_backend = llm_backend or LocalLLMBackend()
         self.memory.log_action("agent_initialized", workspace=str(self.workspace_dir), llm_backend=str(self.llm_backend.config.source))
+        self.memory.update_state("workspace_dir", str(self.workspace_dir))
 
     def execute_command(
         self,
@@ -94,114 +95,17 @@ class TermuxAgent:
             return f"{status}; content={str(content)[:80]}"
         return status
 
-    def _is_valid_file_candidate(self, candidate: Any) -> bool:
-        if not isinstance(candidate, str):
-            return False
-        value = candidate.strip()
-        if not value or any(marker in value for marker in ("&&", "||", "|", "\n", "\r")):
-            return False
-        if value in {".", "..", str(self.workspace_dir), str(self.workspace_dir.resolve())}:
-            return False
-        if value.endswith("/"):
-            return False
-
-        expanded = Path(value).expanduser()
-        workspace_root = str(self.workspace_dir.resolve())
-
-        if expanded.exists() and expanded.is_dir():
-            return False
-
-        if value.startswith(str(self.workspace_dir)) or value.startswith(workspace_root):
-            return True
-        if value.startswith("workspace/") or value.startswith("./"):
-            return True
-        if value.startswith("/") and not value.startswith(workspace_root):
-            return False
-
-        suffix = Path(value).suffix.lower()
-        if suffix and suffix in {".txt", ".md", ".json", ".log", ".dat", ".csv", ".py", ".sh", ".yaml", ".yml"}:
-            return True
-        return False
-
-    def _find_history_file_path(self) -> str | None:
-        history = self.memory.data.get("history", [])
-        for item in reversed(history):
-            if not isinstance(item, dict):
-                continue
-            action = item.get("action") if isinstance(item, dict) else {}
-            result = item.get("result", {}) if isinstance(item, dict) else {}
-            for candidate in (
-                (result.get("path") if isinstance(result, dict) else None),
-                (result.get("file") if isinstance(result, dict) else None),
-                ((action.get("params", {}) if isinstance(action, dict) else {}).get("path") if isinstance(action, dict) else None),
-            ):
-                if self._is_valid_file_candidate(candidate):
-                    return str(candidate).strip()
-        return None
-
-    def _get_latest_file_path(self) -> str | None:
-        ordered_sources = []
-        artifact_path = self.memory.get_latest_file_path()
-        if artifact_path is not None:
-            ordered_sources.append(artifact_path)
-        for source in (self.memory.get_state("last_file_path"), self.memory.get_state("last_path"), self.memory.get_state("last_result_path")):
-            if source is not None:
-                ordered_sources.append(source)
-        ordered_sources.extend(self._find_history_file_path() for _ in range(0))
-        for source in ordered_sources:
-            if self._is_valid_file_candidate(source):
-                return str(source).strip()
-        return self._find_history_file_path()
-
-    def _guarded_read_target(self, goal: str, explicit_path: str | None = None) -> str:
-        if explicit_path and self._is_valid_file_candidate(explicit_path):
-            return str(explicit_path)
-
-        inherited = self._get_latest_file_path()
-        if inherited:
-            return inherited
-
-        if "read it back" in goal.lower() or "read it" in goal.lower() or "read back" in goal.lower():
-            return str(self.workspace_dir)
-
-        return str(self.workspace_dir)
-
-    def _inject_readback_path(self, goal: str, params: dict[str, Any]) -> dict[str, Any]:
-        if not isinstance(params, dict):
-            return params
-
-        lowered = (goal or "").lower()
-        read_intent = any(token in lowered for token in ("read it back", "read back", "read it", "read file", "open file", "show file", "inspect file", "lies es zurück", "lese es zurück", "read the file"))
-        if not read_intent:
-            return params
-
-        path_value = params.get("path")
-        if self._is_valid_file_candidate(path_value):
-            return params
-
-        inherited = self._get_latest_file_path()
-        if inherited:
-            params["path"] = inherited
-            return params
-
-        return params
-
     def _extract_path(self, goal: str) -> str | None:
         goal_text = (goal or "").strip()
         if not goal_text:
             return str(self.workspace_dir)
 
-        invalid_tokens = {
-            "workspace", "file", "datei", "path", "location", "folder", "ordner", "verzeichnis",
-            "named", "name", "called", "call", "in", "at", "to", "from", "of", "mit", "für",
-        }
-
-        patterns = [
-            r"(?:named|name|called|in|at|to|from|of|mit|für|datei|file)\s+(?:the\s+)?([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*(?:\.[A-Za-z0-9_.\-]+)?)",
+        explicit_patterns = [
+            r"(?:named|name|called|in|at|to|from|of|mit|für|in\s+workspace|datei|file)\s+([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*(?:\.[A-Za-z0-9_.\-]+)?)",
             r"(?:workspace|~?/)?[A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*(?:\.[A-Za-z0-9_.\-]+)?",
         ]
 
-        for pattern in patterns:
+        for pattern in explicit_patterns:
             matches = re.findall(pattern, goal_text, flags=re.IGNORECASE)
             if not matches:
                 continue
@@ -209,16 +113,12 @@ class TermuxAgent:
                 cleaned = str(candidate).strip().strip('"\'')
                 if not cleaned or any(marker in cleaned for marker in ("&&", "||", "|", "\n", "\r")):
                     continue
-                lowered = cleaned.lower()
-                if lowered in invalid_tokens:
-                    continue
-                if re.search(r"\b(?:and\s+then|then|und\s+dann|dann|read|write|create|save|show|list|open|inspect|print|display|file|datei|lies|lese|zeige|schreibe|erstelle|speichere|content|text|message|mit|inhalt)\b", lowered, flags=re.IGNORECASE):
+                if cleaned.lower() in {"workspace", "file", "datei", "path", "location", "folder", "ordner", "verzeichnis"}:
+                    return str(self.workspace_dir)
+                if re.search(r"\b(?:and\s+then|then|und\s+dann|dann|read|write|create|save|show|list|open|inspect|print|display|file|datei|lies|lese|zeige|schreibe|erstelle|speichere|content|text|message|mit|inhalt)\b", cleaned, flags=re.IGNORECASE):
                     continue
                 if not ("/" in cleaned or cleaned.startswith("workspace") or cleaned.startswith("./") or cleaned.endswith((".txt", ".md", ".json", ".log", ".dat", ".csv"))):
-                    if "." in cleaned and not cleaned.startswith("."):
-                        pass
-                    else:
-                        continue
+                    continue
                 try:
                     return self.tools.resolve_workspace_path(self.workspace_dir, cleaned)
                 except ValueError:
@@ -244,13 +144,32 @@ class TermuxAgent:
             content = match.group(1).strip().strip('"\'')
             if content and not any(marker in content for marker in ("&&", "||", "|", "\n", "\r")):
                 return content
-
         content_after = re.search(r"(?:with\s+content|mit\s+content|content|text|message|inhalt)\s+(?:is\s+)?(.+?)(?:\s*(?:and\s+then|then|und\s+dann|dann|;|,\s*(?:read|write|create|save|generate|show|list|open|print|inspect|display|lies|lese|zeige|schreibe|erstelle|speichere)|$))", goal, flags=re.IGNORECASE)
         if content_after:
             candidate = content_after.group(1).strip().strip('"\'')
             if candidate and not any(marker in candidate for marker in ("&&", "||", "|", "\n", "\r")):
                 return candidate
+        if re.search(r"(?:write|create|save|generate|schreibe|erstelle|speichere)\s+(?:a\s+)?(?:file|text|datei)\b", goal, flags=re.IGNORECASE):
+            return f"Autonomous agent action for: {goal}"
+        return None
 
+    def _extract_content(self, goal: str) -> str | None:
+        quoted = re.search(r"[\'\"]([^\'\"]+)[\'\"]", goal)
+        if quoted:
+            content = quoted.group(1).strip()
+            if content and not any(marker in content for marker in ("&&", "||", "|", "\n", "\r")):
+                return content
+
+        match = re.search(r"(?:content|text|message|inhalt)\s*[:=]\s*(.+)", goal, flags=re.IGNORECASE)
+        if match:
+            content = match.group(1).strip().strip('"\'')
+            if content and not any(marker in content for marker in ("&&", "||", "|", "\n", "\r")):
+                return content
+        content_after = re.search(r"(?:with\s+content|mit\s+content|content|text|message|inhalt)\s+(?:is\s+)?(.+?)(?:\s*(?:and\s+then|then|und\s+dann|dann|;|,\s*(?:read|write|create|save|generate|show|list|open|print|inspect|display|lies|lese|zeige|schreibe|erstelle|speichere)|$))", goal, flags=re.IGNORECASE)
+        if content_after:
+            candidate = content_after.group(1).strip().strip('"\'')
+            if candidate and not any(marker in candidate for marker in ("&&", "||", "|", "\n", "\r")):
+                return candidate
         if re.search(r"(?:write|create|save|generate|schreibe|erstelle|speichere)\s+(?:a\s+)?(?:file|text|datei)\b", goal, flags=re.IGNORECASE):
             return f"Autonomous agent action for: {goal}"
         return None
@@ -281,22 +200,27 @@ class TermuxAgent:
         file_like_hint = bool(re.search(r"(?:workspace/|\.[A-Za-z0-9]{1,8}\b|file\s+[A-Za-z0-9_.\-/]+|datei\s+[A-Za-z0-9_.\-/]+|in\s+workspace/[A-Za-z0-9_.\-/]+)", cleaned, flags=re.IGNORECASE))
 
         if write_pattern and ("file" in lowered or "datei" in lowered or "text" in lowered or "content" in lowered or "message" in lowered or file_like_hint):
-            path_match = re.search(
-                r"(?:file|datei)\s+(?:named|name|called|at|in|to|for|mit|für)?\s*(?:the\s+)?([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*(?:\.[A-Za-z0-9_.\-]+)?)",
-                cleaned,
-                flags=re.IGNORECASE,
-            )
-            if not path_match:
-                path_match = re.search(
-                    r"(?:named|name|called|in|at|to|for|mit|für)\s+(?:the\s+)?([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*(?:\.[A-Za-z0-9_.\-]+)?)",
-                    cleaned,
-                    flags=re.IGNORECASE,
-                )
-            if not path_match:
-                path_match = re.search(r"workspace/[A-Za-z0-9_.\-/]+(?:\.[A-Za-z0-9_.\-]+)?", cleaned, flags=re.IGNORECASE)
-            path_name = path_match.group(1) if path_match and path_match.groups() else (path_match.group(0) if path_match else "agent_task.txt")
-            if path_name.lower() in {"file", "datei", "named", "name", "called", "in", "at", "to", "for", "mit", "für"}:
-                path_name = "agent_task.txt"
+            explicit_patterns = [
+                r"(?:named|name|called|file|datei)\s+(?:the\s+)?([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*(?:\.[A-Za-z0-9_.\-]+)?)",
+                r"(?:in|at|to|for|mit|für)\s+(?:workspace/)?([A-Za-z0-9_.\-/]+(?:/[A-Za-z0-9_.\-/]+)*(?:\.[A-Za-z0-9_.\-]+)?)",
+                r"workspace/[A-Za-z0-9_.\-/]+(?:\.[A-Za-z0-9_.\-]+)?",
+            ]
+            path_name = "agent_task.txt"
+            for pattern in explicit_patterns:
+                path_match = re.search(pattern, cleaned, flags=re.IGNORECASE)
+                if not path_match:
+                    continue
+                candidate = path_match.group(1) if path_match.lastindex else path_match.group(0)
+                candidate = str(candidate).strip().strip('"\'')
+                if not candidate:
+                    continue
+                if candidate.lower() in {"workspace", "file", "datei", "path", "location", "folder", "ordner", "verzeichnis"}:
+                    continue
+                if candidate.startswith("workspace/"):
+                    path_name = candidate
+                else:
+                    path_name = candidate if "/" in candidate or candidate.endswith((".txt", ".md", ".json", ".log", ".dat", ".csv")) else candidate
+                break
             target = self.tools.safe_join(self.workspace_dir, path_name.replace("workspace/", "")) if path_name.startswith("workspace/") else self.tools.safe_join(self.workspace_dir, path_name)
             content_match = re.search(r"(?:with\s+content|mit\s+content|content|text|message|inhalt)\s*[:=]?\s*(.+?)(?:\s*(?:and\s+then|then|und\s+dann|dann|;|,\s*(?:read|write|create|save|generate|show|list|open|print|inspect|display|lies|lese|zeige|schreibe|erstelle|speichere))|$)", cleaned, flags=re.IGNORECASE)
             content = (
@@ -307,26 +231,15 @@ class TermuxAgent:
             return "write_file", {"path": target, "content": content}
 
         if read_pattern and ("file" in lowered or "datei" in lowered or "workspace" in lowered or "content" in lowered or "read" in lowered or "lies" in lowered or "lese" in lowered or file_like_hint):
-            inherited_path = self._get_latest_file_path()
-            path = self._extract_path(cleaned) or inherited_path or str(self.workspace_dir)
-            if ("read it back" in lowered or "read back" in lowered or "read it" in lowered or "lies it back" in lowered or "lies es zurück" in lowered) and inherited_path:
-                path = inherited_path
+            path = self._extract_path(cleaned)
             if limit is not None:
                 return "read_file", {"path": path, "limit": limit}
             return "read_file", {"path": path}
-
-        if re.search(r"(?:validate|syntax|python|pytest|test)\b", lowered):
-            target_path = self._extract_path(cleaned) or self._get_latest_file_path() or str(self.workspace_dir)
-            if "pytest" in lowered or "test" in lowered and "validate" not in lowered:
-                return "run_pytest", {"path": target_path}
-            return "validate_python_syntax", {"path": target_path}
 
         if re.search(r"(?:list|ls|dir|show directory|workspace|ordner|verzeichnis)", lowered) and not file_like_hint:
             return "list_dir", {"path": str(self.workspace_dir)}
 
         if re.search(r"(?:http|https|api|fetch|request|url)", lowered):
-            if self._is_local_path_task(cleaned):
-                return "read_file", {"path": self._extract_path(cleaned) or self._get_latest_file_path() or str(self.workspace_dir)}
             match = re.search(r"https?://\S+", cleaned)
             url = match.group(0) if match else "https://api.github.com"
             return "http_get", {"url": url, "expected_json": "json" in lowered or "api" in lowered}
@@ -347,12 +260,6 @@ class TermuxAgent:
             summary.append("The previous action worked; continue with the next logical step.")
         else:
             summary.append("The previous action failed or was incomplete; revise the plan and retry with a safer step.")
-            if isinstance(last_result, dict):
-                error_message = last_result.get("error") or last_result.get("stderr") or last_result.get("body") or ""
-                if isinstance(error_message, str) and "directory" in error_message.lower():
-                    summary.append("FILE vs DIRECTORY RULE: use read_file only for files; use list_dir for directories. Never pass a directory path to read_file.")
-                if isinstance(error_message, str) and any(token in error_message.lower() for token in ("syntaxerror", "traceback", "assert", "failed", "permission", "not found")):
-                    summary.append("SELF-CORRECTION RULE: diagnose the exact failing operation, fix the likely root cause, and retry within the same cycle using a narrower, safer action.")
         payload = last_result.get("stdout") or last_result.get("body") or last_result.get("stderr") or ""
         snippet = str(payload)[:180].replace("\n", " ")
         if snippet:
@@ -385,26 +292,20 @@ class TermuxAgent:
             match = re.search(r"https?://\S+", goal)
             url = match.group(0) if match else "https://api.github.com"
             return "http_get", {"url": url, "expected_json": "json" in lowered or "api" in lowered}
-        if re.search(r"(syntax|python|pytest|test|validate)", lowered):
-            target_path = self._extract_path(goal) or self._get_latest_file_path() or str(self.workspace_dir)
-            if "pytest" in lowered and "validate" not in lowered:
-                return "run_pytest", {"path": target_path}
-            if "test" in lowered and "pytest" not in lowered and "validate" not in lowered:
-                return "run_pytest", {"path": target_path}
-            return "validate_python_syntax", {"path": target_path}
         if re.search(r"(write|create|save|generate|make)", lowered):
             path = self._extract_path(goal) or str(self.workspace_dir / "agent_note.txt")
             content = self._extract_content(goal) or f"Autonomous agent action for: {goal}\n"
             return "write_file", {"path": path, "content": content}
+        if re.search(r"(?:search|find|grep|scan|look for|suche|grep)", lowered):
+            pattern = re.search(r"(?:for|nach)\s+([A-Za-z0-9_./\- ]+)", goal, flags=re.IGNORECASE)
+            query = pattern.group(1).strip() if pattern else goal.strip()
+            return "search_text", {"root": str(self.workspace_dir), "pattern": query, "max_results": 10}
         if re.search(r"(read|open|show|cat|inspect|view|file)", lowered):
-            inherited_path = self._get_latest_file_path()
-            path = self._extract_path(goal) or inherited_path
+            path = self._extract_path(goal)
             if path is None:
                 path = last_result.get("path") if isinstance(last_result, dict) else None
             if path is None:
                 path = self.memory.get_state("last_file_path") or str(self.workspace_dir / "notes.txt")
-            if ("read it back" in lowered or "read back" in lowered or "read it" in lowered or "lies it back" in lowered or "lies es zurück" in lowered) and inherited_path:
-                path = inherited_path
             if path == str(self.workspace_dir) and re.search(r"(?:show|print|display)\s+(?:only\s+)?(?:the\s+)?(?:first|last)", lowered):
                 previous_content = self.memory.get_state("last_content")
                 if previous_content is not None:
@@ -412,17 +313,22 @@ class TermuxAgent:
             payload = {"path": path}
             if limit is not None:
                 payload["limit"] = limit
-            payload = self._inject_readback_path(goal, payload)
             return "read_file", payload
         if re.search(r"(list|ls|dir|workspace|directory)", lowered):
             return "list_dir", {"path": str(self.workspace_dir)}
         if re.search(r"(system|status|info|platform|uname)", lowered):
             return "system_info", {}
+        if re.search(r"(?:compare|diff|versus|vergleich|unterschied)", lowered):
+            left_match = re.search(r"(?:compare|diff|vergleich|unterschied)\s+(?:file\s+)?([A-Za-z0-9_.\-/]+)", goal, flags=re.IGNORECASE)
+            right_match = re.search(r"(?:and|vs|gegen|mit)\s+(?:file\s+)?([A-Za-z0-9_.\-/]+)", goal, flags=re.IGNORECASE)
+            if left_match:
+                left = self.tools.resolve_workspace_path(self.workspace_dir, left_match.group(1))
+                right = self.tools.resolve_workspace_path(self.workspace_dir, right_match.group(1)) if right_match else left
+                return "compare_files", {"left": left, "right": right}
+        if re.search(r"(?:analy|analyse|inspect|review|summarize|summary|prüfe|bewerte|zusammenfass)", lowered):
+            path = self._extract_path(goal) or str(self.workspace_dir)
+            return "read_file", {"path": path}
         if last_result and not (last_result.get("ok") or last_result.get("returncode") == 0):
-            if "directory" in str(last_result.get("error") or "").lower() or "read_file" in str(last_result.get("guidance") or "").lower():
-                fallback_path = self._get_latest_file_path()
-                if fallback_path:
-                    return "read_file", {"path": fallback_path}
             return "list_dir", {"path": str(self.workspace_dir)}
         return "run_command", {"command": ["echo", f"agent task: {goal}"]}
 
@@ -431,41 +337,20 @@ class TermuxAgent:
             return self.execute_command(params["command"], timeout=params.get("timeout", 30))
         if action_name == "read_file":
             path_value = params.get("path") or str(self.workspace_dir)
-            injected = self._inject_readback_path(self.memory.get_state("current_goal") or "", params)
-            if injected.get("path"):
-                hinted = str(injected["path"]).strip()
-                if hinted.startswith("/") and not hinted.startswith(str(self.workspace_dir.resolve())):
-                    return {"ok": False, "error": f"Access denied: path escapes workspace root: {hinted}", "guidance": "Use a workspace-local path only. Do not access /etc/passwd or other absolute paths outside the local workspace."}
-                path_value = hinted
             try:
                 if Path(path_value).is_dir():
-                    fallback_path = self._get_latest_file_path()
-                    if fallback_path:
-                        self.memory.update_state("last_path", fallback_path)
-                        self.memory.update_state("last_file_path", fallback_path)
-                        return {
-                            "ok": False,
-                            "error": "Provided path is a directory. Use list_dir for directories or append the target filename.",
-                            "fallback_path": fallback_path,
-                            "guidance": "When a task asks to read back a file created previously, use the exact file path from the previous step's observation result. Never use read_file on a directory.",
-                        }
-                    return {
-                        "ok": False,
-                        "error": "Provided path is a directory. Use list_dir for directories or append the target filename.",
-                        "guidance": "When a task asks to read back a file created previously, use the exact file path from the previous step's observation result. Never use read_file on a directory.",
-                    }
+                    return {"ok": False, "error": f"Path is a directory, not a file: {path_value}"}
                 content = self.tools.read_file(path_value)
                 self.memory.update_state("last_file_path", path_value)
-                self.memory.update_state("last_path", path_value)
                 self.memory.update_state("last_content", content)
                 limit = params.get("limit")
                 if limit is not None:
                     content = content[: int(limit)]
                 return {"ok": True, "content": content}
             except FileNotFoundError:
-                return {"ok": False, "error": f"File not found: {path_value}", "diagnostic": "The file does not exist in the workspace. Abort or switch to a create/write action rather than repeating the same missing-file read."}
+                return {"ok": False, "error": f"File not found: {path_value}"}
             except (OSError, IsADirectoryError):
-                return {"ok": False, "error": "Provided path is a directory. Use list_dir for directories or append the target filename.", "guidance": "When a task asks to read back a file created previously, use the exact file path from the previous step's observation result. Never use read_file on a directory."}
+                return {"ok": False, "error": f"Unable to read file: {path_value}"}
         if action_name == "slice_output":
             text = str(params.get("text", ""))
             limit = params.get("limit")
@@ -476,31 +361,18 @@ class TermuxAgent:
         if action_name == "write_file":
             path = self.tools.write_file(params["path"], params["content"])
             self.memory.update_state("last_file_path", path)
-            self.memory.update_state("last_path", path)
             self.memory.update_state("last_content", params["content"])
             return {"ok": True, "path": path, "bytes_written": len(params["content"])}
         if action_name == "list_dir":
             return {"ok": True, "entries": self.tools.list_dir(params["path"])}
         if action_name == "system_info":
             return {"ok": True, **self.tools.system_info()}
+        if action_name == "search_text":
+            return self.tools.search_text(params["root"], params["pattern"], max_results=params.get("max_results", 20))
+        if action_name == "compare_files":
+            return self.tools.compare_files(params["left"], params["right"])
         if action_name == "http_get":
-            url = params["url"]
-            if self._is_local_path_task(url):
-                raise PermissionError(f"Access denied: local workspace paths are not allowed through the network tool: {url}")
-            return http_get(url, timeout=params.get("timeout", 15), expected_json=params.get("expected_json", False))
-        if action_name == "validate_python_syntax":
-            return self.tools.validate_python_syntax(params.get("path") or self.workspace_dir)
-        if action_name == "run_pytest":
-            return self.tools.run_pytest(params.get("path"), args=params.get("args"))
-        if action_name == "fix_file":
-            file_path = params.get("path") or self._get_latest_file_path() or str(self.workspace_dir)
-            return self.tools.patch_file(file_path, content=params.get("content"))
-        if action_name == "write_file":
-            path = self.tools.write_file(params["path"], params["content"])
-            self.memory.update_state("last_file_path", path)
-            self.memory.update_state("last_path", path)
-            self.memory.update_state("last_content", params["content"])
-            return {"ok": True, "path": path, "bytes_written": len(params["content"])}
+            return http_get(params["url"], timeout=params.get("timeout", 15), expected_json=params.get("expected_json", False))
         return {"ok": False, "error": f"Unknown action: {action_name}"}
 
     def reflect_on_result(self, goal: str, result: dict[str, Any]) -> tuple[str, str | None, bool]:
@@ -512,34 +384,14 @@ class TermuxAgent:
                 return "The write completed successfully; this task can be considered complete unless more follow-up work is needed.", None, True
             return "The action succeeded; continue with the next logical step if the task is not yet finished.", None, True
 
-        error_text = str(result.get("error") or result.get("stderr") or result.get("body") or "").lower()
         if "read" in goal.lower() or "open" in goal.lower() or "file" in goal.lower():
-            if "directory" in error_text:
-                return "FILE vs DIRECTORY RULE: use read_file only for files; use list_dir for directories. Never pass a directory path to read_file. When a task asks to read back a file created previously, use the exact file path from the previous step's observation result.", "list workspace contents and then read the exact target file path from the previous step's result", False
-            if any(token in error_text for token in ("syntaxerror", "traceback", "assert", "failed", "not found", "permission")):
-                return "The file or tool operation failed; diagnose the exact issue, apply a surgical fix, and retry within the same cycle before escalating.", "narrow the failing operation to the precise file and retry with minimal context", False
             return "The file operation failed; verify whether the path exists and adjust the plan.", "inspect workspace files", False
-
-        if any(token in error_text for token in ("syntaxerror", "traceback", "assert", "failed", "not found", "permission")):
-            return "The previous action failed; adjust the strategy based on the exact traceback, then retry with a smaller and more targeted change.", "diagnose the failing step and apply the minimal corrective action", False
         return "The previous step did not complete successfully; self-correct by trying a safer or more specific step.", "re-evaluate with a more precise action", False
 
     def _self_correct(self, goal: str, last_result: dict[str, Any] | None) -> str:
         if not last_result:
             return goal
-
-        error_text = str(last_result.get("error") or last_result.get("stderr") or last_result.get("body") or "").lower()
         if not (last_result.get("ok") or last_result.get("returncode") == 0 or last_result.get("status") == 200):
-            if "directory" in error_text:
-                fallback_path = self._get_latest_file_path()
-                if fallback_path:
-                    return f"read the exact file at {fallback_path}"
-                return "list workspace contents and then read the exact target file"
-            if "syntaxerror" in error_text or "traceback" in error_text or "assert" in error_text or "failed" in error_text:
-                target_path = self._get_latest_file_path() or self._extract_path(goal) or str(self.workspace_dir)
-                if target_path and str(target_path) != str(self.workspace_dir):
-                    return f"patch the file at {target_path} with the minimal corrective edit and rerun validation"
-                return "rewrite the broken file with a minimal targeted fix and rerun validation"
             if "file" in goal.lower() or "write" in goal.lower() or "create" in goal.lower():
                 return "inspect workspace files"
             if "http" in goal.lower() or "api" in goal.lower():
@@ -547,83 +399,35 @@ class TermuxAgent:
             return "review the previous output and retry with a smaller, safer action"
         return goal
 
-    def _mark_validation_collision(self, action_name: str, params: dict[str, Any]) -> bool:
-        if action_name not in {"validate_python_syntax", "run_pytest"}:
-            return False
-        guard_key = json.dumps({"action": action_name, "path": params.get("path"), "args": params.get("args")}, sort_keys=True)
-        previous = self.memory.get_state("last_validation_guard")
-        if previous == guard_key:
-            return True
-        self.memory.update_state("last_validation_guard", guard_key)
-        return False
+    def _normalize_result(self, action_name: str, params: dict[str, Any], result: dict[str, Any], *, task: str) -> dict[str, Any]:
+        status = "ok" if bool(result.get("ok") or result.get("returncode") == 0 or result.get("status") == 200) else "error"
+        return {
+            "task": task,
+            "action": {"name": action_name, "params": params},
+            "status": status,
+            "result": result,
+            "warnings": [],
+            "next_action": None,
+        }
 
-    def _mark_missing_file_collision(self, action_name: str, params: dict[str, Any]) -> bool:
-        if action_name != "read_file":
-            return False
-        guard_key = json.dumps({"action": action_name, "path": params.get("path")}, sort_keys=True)
-        previous = self.memory.get_state("last_missing_file_guard")
-        if previous == guard_key:
-            return True
-        self.memory.update_state("last_missing_file_guard", guard_key)
-        return False
+    def plan_task(self, task: str) -> dict[str, Any]:
+        task_text = (task or "").strip()
+        if not task_text:
+            return {"goal": "", "status": "empty", "steps": []}
 
-    def _build_validation_repair(self, path: str | None, failure: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]] | None:
-        repair_path = str(path or self._get_latest_file_path() or self._extract_path(self.memory.get_state("current_goal") or "") or str(self.workspace_dir))
-        try:
-            repaired_path = self.tools.resolve_workspace_path(self.workspace_dir, repair_path)
-        except ValueError:
-            return None
-        if repaired_path == str(self.workspace_dir):
-            return None
-        content = (failure or {}).get("corrected_content") or (
-            "# Minimal targeted repair generated by TermuxAgent\n"
-            "# Preserve the existing logic and replace only the broken block.\n"
-        )
-        return "write_file", {"path": repaired_path, "content": content}
+        subtasks = self.split_subtasks(task_text)
+        if not subtasks:
+            subtasks = [task_text]
 
-    def _enforce_no_repeat_validation(self, action_name: str, params: dict[str, Any], *, goal: str, result: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any]] | None:
-        if action_name not in {"validate_python_syntax", "run_pytest"}:
-            return None
-        if not result or (result.get("ok") or result.get("returncode") == 0 or result.get("status") == 200):
-            return None
-        repair = self._build_validation_repair(params.get("path"), result)
-        if not repair:
-            return None
-        next_action_name, next_params = repair
-        return next_action_name, next_params, {"status": "repair_written", "reason": "Validation failed; forced minimal repair instead of repeating the same validation call."}
+        steps = []
+        for index, subtask in enumerate(subtasks, 1):
+            action_name, params = self._resolve_task_to_action(subtask)
+            steps.append({"index": index, "task": subtask, "action": action_name, "params": params})
 
-    def _build_repair_action(self, goal: str, result: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
-        if not isinstance(result, dict):
-            return None
-        repair_path = result.get("repair_path") or result.get("path")
-        if not repair_path:
-            repair_path = self._get_latest_file_path() or self._extract_path(goal) or str(self.workspace_dir)
-        if repair_path in {None, str(self.workspace_dir)}:
-            return None
-        content = result.get("corrected_content")
-        if content is None:
-            content = (
-                "# Minimal targeted repair generated by TermuxAgent\n"
-                "# Fix the syntax or test failure and keep the change as narrow as possible.\n"
-            )
-        return "write_file", {"path": repair_path, "content": content}
-
-    def _is_local_path_task(self, goal: str) -> bool:
-        lowered = (goal or "").lower()
-        local_markers = (
-            "workspace/",
-            "/workspace",
-            "test",
-            "txt",
-            "json",
-            "py",
-            "sh",
-            "md",
-            "workspace",
-        )
-        has_local_path = any(marker in lowered for marker in local_markers)
-        has_network_signal = any(token in lowered for token in ("http://", "https://", "api", "github.com", "fetch", "request", "url"))
-        return has_local_path and not has_network_signal
+        plan = {"goal": task_text, "status": "planned", "steps": steps}
+        self.memory.add_plan(task_text, [step["task"] for step in steps])
+        self.memory.update_state("current_plan", plan)
+        return plan
 
     def run_once(self, task: str = "", command: str | list[str] | None = None) -> dict[str, Any]:
         if command is not None:
@@ -637,6 +441,9 @@ class TermuxAgent:
         task_text = (task or "").strip()
         if not task_text:
             return {"status": "empty_task", "task": task_text, "history": []}
+
+        plan = self.plan_task(task_text)
+        self.memory.add_fact("task_plan", plan["steps"], source="planner", tags=["plan", "task"])
 
         subtasks = self.split_subtasks(task_text)
         if len(subtasks) > 1:
@@ -658,12 +465,7 @@ class TermuxAgent:
 
         action_name, params = self._resolve_task_to_action(task_text)
         result = self.perform_action(action_name, params)
-        payload = {
-            "status": "executed",
-            "task": task_text,
-            "action": {"name": action_name, "params": params},
-            "result": result,
-        }
+        payload = self._normalize_result(action_name, params, result, task=task_text)
         self.memory.log_action("run_once", status=payload["status"], task=payload["task"], tool_action=payload["action"], result=payload["result"])
         self.memory.update_state("last_run", payload)
         return payload
@@ -683,118 +485,15 @@ class TermuxAgent:
             if prior_context:
                 thought = f"{prior_context} | {thought}"
             action_name, params = self.identify_action(current_goal, last_result)
-            if action_name == "read_file":
-                params = self._inject_readback_path(current_goal, params)
-                if self._mark_missing_file_collision(action_name, params):
-                    return {
-                        "status": "aborted_missing_file",
-                        "goal": current_goal,
-                        "cycles": cycle,
-                        "history": steps,
-                        "context": prior_context,
-                        "diagnostic": "Missing file read attempted repeatedly; aborting to prevent identical read loops.",
-                    }
-            if action_name in {"validate_python_syntax", "run_pytest"} and self._mark_validation_collision(action_name, params):
-                repair = self._build_validation_repair(params.get("path"), {"corrected_content": "# Minimal repair generated after repeated validation failure.\n"})
-                if repair:
-                    action_name, params = repair
-                    action = {"name": action_name, "params": params}
-                    result = self.perform_action(action_name, params)
-                    next_step = f"validate the repaired file at {params.get('path')}"
-                    reflection = "Validation repeated with identical failing parameters; forced a minimal repair before any further validation."
-                    cycle_record = {
-                        "cycle": cycle,
-                        "goal": current_goal,
-                        "thought": thought,
-                        "action": action,
-                        "result": result,
-                        "reflection": reflection,
-                        "next_step": next_step,
-                        "completed": False,
-                    }
-                    steps.append(cycle_record)
-                    self.memory.add_cycle(
-                        cycle=cycle,
-                        goal=current_goal,
-                        thought=thought,
-                        action=action,
-                        result=result,
-                        reflection=reflection,
-                        next_step=next_step,
-                    )
-                    last_result = result
-                    current_goal = next_step
-                    continue
-                return {
-                    "status": "aborted_repeat_validation",
-                    "goal": current_goal,
-                    "cycles": cycle,
-                    "history": steps,
-                    "context": prior_context,
-                    "diagnostic": "Validation repeated with identical failing parameters; aborting to prevent an infinite validation loop.",
-                }
             action = {"name": action_name, "params": params}
             result = self.perform_action(action_name, params)
-
-            repeat_repair = self._enforce_no_repeat_validation(action_name, params, goal=current_goal, result=result)
-            if repeat_repair is not None:
-                repaired_action_name, repaired_params, status = repeat_repair
-                repair_result = self.perform_action(repaired_action_name, repaired_params)
-                reflection = status["reason"]
-                next_step = f"validate the repaired file at {repaired_params.get('path')}"
-                cycle_record = {
-                    "cycle": cycle,
-                    "goal": current_goal,
-                    "thought": thought,
-                    "action": {"name": repaired_action_name, "params": repaired_params},
-                    "result": repair_result,
-                    "reflection": reflection,
-                    "next_step": next_step,
-                    "completed": False,
-                }
-                steps.append(cycle_record)
-                self.memory.add_cycle(
-                    cycle=cycle,
-                    goal=current_goal,
-                    thought=thought,
-                    action={"name": repaired_action_name, "params": repaired_params},
-                    result=repair_result,
-                    reflection=reflection,
-                    next_step=next_step,
-                )
-                last_result = repair_result
-                current_goal = next_step
-                continue
-
-            if not (result.get("ok") or result.get("returncode") == 0 or result.get("status") == 200):
-                error_text = str(result.get("error") or result.get("stderr") or result.get("body") or "").lower()
-                if "directory" in error_text:
-                    fallback_path = self._get_latest_file_path()
-                    if fallback_path:
-                        params["path"] = fallback_path
-                        result = self.perform_action(action_name, params)
-                elif any(token in error_text for token in ("syntaxerror", "traceback", "assert", "not found", "permission", "failed")):
-                    corrected_goal = self._self_correct(current_goal, result)
-                    if corrected_goal and corrected_goal != current_goal:
-                        current_goal = corrected_goal
-                    if action_name in {"validate_python_syntax", "run_pytest"}:
-                        repair = self._build_repair_action(current_goal, result)
-                        if repair is not None:
-                            action_name, params = repair
-                            action = {"name": action_name, "params": params}
-                            result = self.perform_action(action_name, params)
-                            current_goal = f"validate the repaired file at {params.get('path')}"
-                    if action_name == "read_file" and "not found" in error_text:
-                        return {
-                            "status": "aborted_missing_file",
-                            "goal": current_goal,
-                            "cycles": cycle,
-                            "history": steps,
-                            "context": prior_context,
-                            "diagnostic": "The file does not exist; aborting read-back instead of repeating the same missing-file read.",
-                        }
-
             reflection, next_step, ok = self.reflect_on_result(current_goal, result)
+
+            if not ok and action_name in {"read_file", "write_file", "list_dir", "http_get"}:
+                fallback = self._self_correct(current_goal, result)
+                if fallback and fallback != current_goal:
+                    next_step = fallback
+                    reflection = f"Fallback triggered after failed action: {fallback}."
 
             cycle_record = {
                 "cycle": cycle,
@@ -841,6 +540,7 @@ class TermuxAgent:
             "context": prior_context,
         }
         self.memory.update_state("last_autonomous_run", summary)
+        self.memory.add_fact("last_autonomous_goal", goal, source="autonomy", tags=["goal", "history"])
         return summary
 
     def run_autonomous(self, goal: str, max_cycles: int = 5) -> dict[str, Any]:
@@ -909,10 +609,22 @@ class TermuxAgent:
             "workspace": str(self.workspace_dir),
             "state": self.memory.get_state(),
             "context": self.memory.get_recent_context(),
+            "plans": self.memory.data.get("plans", [])[-5:],
+            "facts": self.memory.data.get("facts", [])[-10:],
+            "history": self.memory.data.get("history", [])[-10:],
             "llm_backend": {
                 "source": self.llm_backend.config.source,
                 "available": self.llm_backend.is_available(),
                 "binary_path": self.llm_backend.config.binary_path,
                 "model_path": self.llm_backend.config.model_path,
             },
+        }
+
+    def memory_snapshot(self, *, limit: int = 10) -> dict[str, Any]:
+        return {
+            "state": self.memory.get_state(),
+            "context": self.memory.get_recent_context(limit=limit),
+            "plans": self.memory.data.get("plans", [])[-limit:],
+            "facts": self.memory.data.get("facts", [])[-limit:],
+            "history": self.memory.data.get("history", [])[-limit:],
         }
