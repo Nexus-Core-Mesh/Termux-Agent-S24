@@ -1,0 +1,120 @@
+
+---
+timestamp=2026-11-07T01:37:14Z
+source=sample.txt
+source_sha256=243350dbb1a8545f3be881fb94271790d8ef4fefdf47fa974d0e567207eaafe7
+project=workspace
+route=drop_in/2026-11-07T01-37-14Z_sample.txt
+
+Project: Termux-Agent-S24
+This is a note for the local agent project.
+
+
+---
+timestamp=2026-11-07T01:43:28Z
+source=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/inbox/watchdog_drop.txt
+queued_copy=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/inbox/20261107T014328Z_watchdog_drop.txt
+project=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace
+archive=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/drop_in/2026-11-07T01-43-28Z_20261107T014328Z_watchdog_drop.txt
+sha256=860796e95346b78872c1c3d03cc979e7a385c4ba4c7bc3de69cc9161c797d6a1
+
+Project: Termux-Agent-S24
+This drop should route to the local project folder.
+
+
+---
+timestamp=2026-11-07T02:06:18Z
+source=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/inbox/20261107T014328Z_watchdog_drop.txt
+queued_copy=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/inbox/20261107T020618Z_20261107T014328Z_watchdog_drop.txt
+project=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace
+archive=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/drop_in/2026-11-07T02-06-18Z_20261107T020618Z_20261107T014328Z_watchdog_drop.txt
+sha256=860796e95346b78872c1c3d03cc979e7a385c4ba4c7bc3de69cc9161c797d6a1
+
+Project: Termux-Agent-S24
+This drop should route to the local project folder.
+
+
+---
+timestamp=2026-11-07T02:06:18Z
+source=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/inbox/probe.txt
+queued_copy=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/inbox/20261107T020618Z_probe.txt
+project=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace
+archive=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/drop_in/2026-11-07T02-06-18Z_20261107T020618Z_probe.txt
+sha256=32be8c58fb43222a915e395760e7fc93033e5b3cfcbd1a567014992415a3d182
+
+Project: Termux-Agent-S24
+This is a lightweight local autoprobe.
+
+
+---
+timestamp=2026-11-07T02:15:26Z
+source=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/inbox/20261107T020618Z_20261107T014328Z_watchdog_drop.txt
+queued_copy=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/inbox/20261107T021526Z_20261107T020618Z_20261107T014328Z_watchdog_drop.txt
+project=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace
+archive=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/drop_in/2026-11-07T02-15-26Z_20261107T021526Z_20261107T020618Z_20261107T014328Z_watchdog_drop.txt
+sha256=860796e95346b78872c1c3d03cc979e7a385c4ba4c7bc3de69cc9161c797d6a1
+
+Project: Termux-Agent-S24
+This drop should route to the local project folder.
+
+
+---
+timestamp=2026-11-07T02:15:26Z
+source=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/inbox/20261107T020618Z_probe.txt
+queued_copy=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/inbox/20261107T021526Z_20261107T020618Z_probe.txt
+project=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace
+archive=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/drop_in/2026-11-07T02-15-26Z_20261107T021526Z_20261107T020618Z_probe.txt
+sha256=32be8c58fb43222a915e395760e7fc93033e5b3cfcbd1a567014992415a3d182
+
+Project: Termux-Agent-S24
+This is a lightweight local autoprobe.
+
+
+---
+timestamp=2026-11-07T02:15:26Z
+source=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/inbox/dedupe_case.txt
+queued_copy=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/inbox/20261107T021526Z_dedupe_case.txt
+project=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace
+archive=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/drop_in/2026-11-07T02-15-26Z_20261107T021526Z_dedupe_case.txt
+sha256=929d452a1e3fb7ce2d3efb8c753199afcbf6ed70be3185d77cee5301a4ba575e
+
+Project: Termux-Agent-S24
+Same data, second run should skip.
+
+
+---
+timestamp=2026-11-07T02:15:26Z
+source=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/inbox/20261107T021526Z_20261107T020618Z_20261107T014328Z_watchdog_drop.txt
+queued_copy=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/inbox/20261107T021526Z_20261107T021526Z_20261107T020618Z_20261107T014328Z_watchdog_drop.txt
+project=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace
+archive=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/drop_in/2026-11-07T02-15-26Z_20261107T021526Z_20261107T021526Z_20261107T020618Z_20261107T014328Z_watchdog_dro.txt
+sha256=860796e95346b78872c1c3d03cc979e7a385c4ba4c7bc3de69cc9161c797d6a1
+
+Project: Termux-Agent-S24
+This drop should route to the local project folder.
+
+
+---
+timestamp=2026-11-07T02:15:26Z
+source=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/inbox/20261107T021526Z_20261107T020618Z_probe.txt
+queued_copy=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/inbox/20261107T021526Z_20261107T021526Z_20261107T020618Z_probe.txt
+project=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace
+archive=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/drop_in/2026-11-07T02-15-26Z_20261107T021526Z_20261107T021526Z_20261107T020618Z_probe.txt
+sha256=32be8c58fb43222a915e395760e7fc93033e5b3cfcbd1a567014992415a3d182
+
+Project: Termux-Agent-S24
+This is a lightweight local autoprobe.
+
+
+---
+timestamp=2026-11-07T02:15:26Z
+source=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/inbox/20261107T021526Z_dedupe_case.txt
+queued_copy=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/inbox/20261107T021526Z_20261107T021526Z_dedupe_case.txt
+project=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace
+archive=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/drop_in/2026-11-07T02-15-26Z_20261107T021526Z_20261107T021526Z_dedupe_case.txt
+sha256=929d452a1e3fb7ce2d3efb8c753199afcbf6ed70be3185d77cee5301a4ba575e
+
+Project: Termux-Agent-S24
+Same data, second run should skip.
+
+

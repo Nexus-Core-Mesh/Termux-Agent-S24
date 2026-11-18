@@ -1,0 +1,11 @@
+---
+timestamp=2026-11-07T02:15:26Z
+source=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/inbox/20261107T021526Z_20261107T020618Z_probe.txt
+queued_copy=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/inbox/20261107T021526Z_20261107T021526Z_20261107T020618Z_probe.txt
+project=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace
+archive=/home/runner/work/Termux-Agent-S24/Termux-Agent-S24/workspace/drop_in/2026-11-07T02-15-26Z_20261107T021526Z_20261107T021526Z_20261107T020618Z_probe.txt
+sha256=32be8c58fb43222a915e395760e7fc93033e5b3cfcbd1a567014992415a3d182
+
+Project: Termux-Agent-S24
+This is a lightweight local autoprobe.
+

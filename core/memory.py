@@ -22,7 +22,7 @@ class MemoryManager:
     def _default_state(self) -> dict[str, Any]:
         now = self._now_iso()
         return {
-            "schema_version": "1.0",
+            "schema_version": "1.1",
             "created_at": now,
             "updated_at": now,
             "status": "initialized",
@@ -30,6 +30,7 @@ class MemoryManager:
             "state": {},
             "history": [],
             "actions": [],
+            "artifacts": {},
         }
 
     def _load(self) -> dict[str, Any]:
@@ -48,7 +49,7 @@ class MemoryManager:
             raw_data = {}
 
         normalized = self._default_state()
-        for key in ("state", "goals", "history", "actions"):
+        for key in ("state", "goals", "history", "actions", "artifacts"):
             if isinstance(raw_data.get(key), type(normalized[key])):
                 normalized[key] = raw_data[key]
         normalized["status"] = str(raw_data.get("status", "initialized"))
@@ -111,12 +112,37 @@ class MemoryManager:
             "next_step": next_step,
             "timestamp": self._now_iso(),
         }
-        self.data.setdefault("history", []).append(entry)
+        history = self.data.setdefault("history", [])
+        if len(history) > 12:
+            history[:] = history[-12:]
+        history.append(entry)
         self.update_state("last_cycle", cycle)
         self.update_state("last_reflection", reflection)
         self.update_state("next_step", next_step)
+        self._store_artifact_reference(goal, action, result)
         self.save()
         return entry
+
+    def _store_artifact_reference(self, goal: str, action: dict[str, Any], result: dict[str, Any]) -> None:
+        action_name = str((action or {}).get("name", ""))
+        params = (action or {}).get("params", {}) if isinstance(action, dict) else {}
+        path_value = None
+        if isinstance(params, dict):
+            path_value = params.get("path")
+        if isinstance(result, dict):
+            result_path = result.get("path")
+            if isinstance(result_path, str) and result_path.strip():
+                path_value = result_path
+        if not isinstance(path_value, str) or not path_value.strip():
+            return
+
+        artifacts = self.data.setdefault("artifacts", {})
+        if not isinstance(artifacts, dict):
+            artifacts = {}
+        artifacts["last_path"] = path_value.strip()
+        artifacts["last_goal"] = goal.strip()
+        artifacts["last_action"] = action_name
+        self.data["artifacts"] = artifacts
 
     def update_state(self, key: str, value: Any) -> Any:
         self.data.setdefault("state", {})[key] = value
@@ -136,7 +162,75 @@ class MemoryManager:
             "last_reflection": self.get_state("last_reflection"),
             "next_step": self.get_state("next_step"),
             "recent_history": history[-limit:],
+            "artifacts": self.data.get("artifacts", {}),
         }
+
+    def get_latest_file_path(self) -> str | None:
+        artifact_path = self.data.get("artifacts", {}).get("last_path")
+        if isinstance(artifact_path, str) and artifact_path.strip():
+            return artifact_path.strip()
+        for key in ("last_file_path", "last_path"):
+            value = self.get_state(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    def record_file_hash(self, path: str, sha256: str, *, source: str | None = None) -> dict[str, Any]:
+        state = self.data.setdefault("state", {})
+        seen = state.setdefault("seen_file_hashes", {})
+        if not isinstance(seen, dict):
+            seen = {}
+        hash_index = state.setdefault("file_hash_index", {})
+        if not isinstance(hash_index, dict):
+            hash_index = {}
+        state["seen_file_hashes"] = seen
+        state["file_hash_index"] = hash_index
+        entry = {
+            "path": str(path),
+            "sha256": str(sha256),
+            "source": source,
+            "timestamp": self._now_iso(),
+        }
+        seen[str(path)] = entry
+        hash_index[str(sha256)] = {
+            "sha256": str(sha256),
+            "path": str(path),
+            "source": source,
+            "timestamp": entry["timestamp"],
+        }
+        history = state.setdefault("file_hash_history", [])
+        if not isinstance(history, list):
+            history = []
+        state["file_hash_history"] = history
+        history.append({
+            "path": str(path),
+            "sha256": str(sha256),
+            "source": source,
+            "timestamp": entry["timestamp"],
+        })
+        self.save()
+        return entry
+
+    def get_file_hash(self, path: str) -> str | None:
+        seen = self.data.setdefault("state", {}).get("seen_file_hashes", {})
+        if not isinstance(seen, dict):
+            return None
+        entry = seen.get(str(path))
+        if isinstance(entry, dict):
+            digest = entry.get("sha256")
+            if isinstance(digest, str) and digest.strip():
+                return digest.strip()
+        return None
+
+    def get_hash_match(self, sha256: str) -> dict[str, Any] | None:
+        state = self.data.setdefault("state", {})
+        hash_index = state.get("file_hash_index", {})
+        if not isinstance(hash_index, dict):
+            return None
+        entry = hash_index.get(str(sha256))
+        if isinstance(entry, dict):
+            return entry
+        return None
 
     def reset(self) -> dict[str, Any]:
         fresh = self._default_state()
